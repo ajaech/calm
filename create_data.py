@@ -1,6 +1,8 @@
 import bz2
 import code
 import json
+import random
+import re
 
 from nltk import tokenize
 
@@ -13,6 +15,7 @@ outfile = bz2.BZ2File('/s0/ajaech/reddit.tsv', 'w')
 
 def Extract(fname, year):
 
+  count = 0
   with bz2.BZ2File(fname, 'r') as f:
     for idx, line in enumerate(f):
       data = json.loads(line)
@@ -23,11 +26,18 @@ def Extract(fname, year):
       subreddit = data['subreddit']
       if subreddit not in subreddits:
         continue
+      if subreddit == 'nba' and random.choice([True, False]):
+        continue  # skip half of nba comments
     
       sentences = tokenize.sent_tokenize(text)
       for sentence in sentences:
+        re.sub(ur'http://\S*', '<URL>', sentence)
         words = ' '.join(tokenize.word_tokenize(sentence))
-        line = u'{0}\t{1}\t{2}\n'.format(subreddit, year, words)
+        
+        count += 1
+        fields = u'\t'.join((str(count), subreddit, 
+                             str(year), words))
+        line = u'{0}\n'.format(fields)
         outfile.write(line.encode('utf8'))
         break
 
