@@ -1,6 +1,7 @@
+import argparse
 import collections
-import pickle
 import numpy as np
+import pickle
 import re
 
 class Vocab(object):
@@ -122,6 +123,10 @@ class Vocab(object):
     return key in self.word_to_idx
 
   def __getitem__(self, key):
+    """If key is an int lookup word by id, if key is a word then lookup id."""
+    if type(key) == int or type(key) == np.int64:
+      return self.idx_to_word[key]
+
     return self.LookupIdx(key)
 
   def __iter__(self):
@@ -139,3 +144,15 @@ class Vocab(object):
       with open(filename, 'w') as f:
         for i in range(self.vocab_size):
           f.write('{0}\n'.format(self.idx_to_word[i]))
+
+
+if __name__ == '__main__':
+  """Print the contents of the vocabulary."""
+  parser = argparse.ArgumentParser()
+  parser.add_argument('filename')
+  args = parser.parse_args()
+
+  v = Vocab.Load(args.filename)
+
+  for i in v.GetWords():
+    print i

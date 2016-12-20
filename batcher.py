@@ -15,23 +15,21 @@ class Dataset(object):
       name: optional name for the dataset
     """
     self._sentences = []
-    self._subreddits = []
-    self._years = []
+    self._usernames = []
     self.name = name
 
-    self.batch_size = 1
+    self.batch_size = 100
     self.preshuffle = preshuffle
     self._max_len = max_len
 
-  def AddDataSource(self, subreddits, years, sentences):
+  def AddDataSource(self, usernames, sentences):
     self._sentences.append(sentences)
-    self._subreddits.append(subreddits)
-    self._years.append(years)
+    self._usernames.append(usernames)
 
   def GetSentences(self):
     return itertools.chain(*self._sentences)
 
-  def Prepare(self, word_vocab, subreddit_vocab, year_vocab):
+  def Prepare(self, word_vocab, username_vocab):
     sentences = list(itertools.chain(*self._sentences))
   
     self.seq_lens = np.array([min(len(x), self._max_len) for x in sentences])
@@ -40,10 +38,8 @@ class Dataset(object):
 
     self.sentences = self.GetNumberLines(sentences, word_vocab,
                                          self._max_len)
-    self.subreddits = np.array([subreddit_vocab[s] for s in 
-                                itertools.chain(*self._subreddits)])
-    self.years = np.array([year_vocab[y] for y in 
-                           itertools.chain(*self._years)])
+    self.usernames = np.array([username_vocab[u] for u in 
+                               itertools.chain(*self._usernames)])
 
     self.N = len(sentences)
     if self.preshuffle:
@@ -73,8 +69,7 @@ class Dataset(object):
 
     self.sentences = self.sentences[s, :]
     self.seq_lens = self.seq_lens[s]
-    self.years = self.years[s]
-    self.subreddits = self.subreddits[s]
+    self.usernames = self.usernames[s]
 
   def GetNextBatch(self):
     if self.current_idx + self.batch_size > self.N:
@@ -86,4 +81,4 @@ class Dataset(object):
     self.current_idx += self.batch_size
 
     return (self.sentences[idx, :], self.seq_lens[idx], 
-            self.subreddits[idx], self.years[idx])
+            self.usernames[idx])
