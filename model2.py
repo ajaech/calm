@@ -123,6 +123,7 @@ class BaseModel(object):
 
   def __init__(self, max_length, vocab_size, batch_size):
     self.max_length = max_length
+    self.vocab_size = vocab_size
     self.x = tf.placeholder(tf.int32, [batch_size, max_length], name='x')
     self.y = tf.placeholder(tf.int64, [batch_size, max_length], name='y')
     self.seq_len = tf.placeholder(tf.int64, [batch_size], name='seq_len')
@@ -144,6 +145,25 @@ class BaseModel(object):
     sz = [batch_size, max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
+  def DoNCE(self, weights, linear_map, num_sampled=256):
+
+    w_list = tf.unpack(weights, axis=1)
+    losses = []
+    for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
+      w_mapped = tf.matmul(w, linear_map, transpose_b=True)
+
+      sampled_values = tf.nn.learned_unigram_candidate_sampler(
+        true_classes=y,
+        num_true=1,
+        num_sampled=num_sampled,
+        unique=True,
+        range_max=self.vocab_size)
+
+      nce_loss = tf.nn.nce_loss(self._word_embeddings, self.base_bias, 
+                                w_mapped, y, num_sampled, self.vocab_size, 
+                                sampled_values=sampled_values)        
+      losses.append(nce_loss)
+    return tf.pack(losses, 1)
 
 class StandardModel(BaseModel):
 
@@ -163,19 +183,8 @@ class StandardModel(BaseModel):
     reshaped_mask = tf.reshape(self._mask, [-1])
 
     if use_nce_loss:
-      reshaped_labels = tf.reshape(self.y, [-1, 1])
-      num_sampled = 256
-      sampled_values = tf.nn.learned_unigram_candidate_sampler(
-        true_classes=reshaped_labels,
-        num_true=1,
-        num_sampled=num_sampled,
-        unique=False,
-        range_max=vocab_size)
-      nce_loss = tf.nn.nce_loss(self._word_embeddings, self.base_bias, resized_outputs,
-                                reshaped_labels, num_sampled, vocab_size,
-                                sampled_values=sampled_values)
-      reshaped_loss = tf.reshape(nce_loss, [self.batch_size, max_length])
-      masked_loss = tf.mul(nce_loss, reshaped_mask)
+      losses = self.DoNCE(outputs, linear_map)
+      masked_loss = tf.mul(losses, self._mask)
     else:
       reshaped_labels = tf.reshape(self.y, [-1])
       reshaped_logits = tf.matmul(
@@ -212,12 +221,7 @@ class HyperModel(BaseModel):
     if use_nce_loss:
       reshaped_labels = tf.reshape(self.y, [-1, 1])
       num_sampled = 128
-      sampled_values = tf.nn.learned_unigram_candidate_sampler(
-        true_classes=reshaped_labels,
-        num_true=1,
-        num_sampled=num_sampled,
-        unique=True,
-        range_max=vocab_size)
+
       nce_loss = tf.nn.nce_loss(self._word_embeddings, self.base_bias, resized_outputs,
                                 reshaped_labels, num_sampled, vocab_size,
                                 sampled_values=sampled_values)
@@ -233,236 +237,3 @@ class HyperModel(BaseModel):
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
     
-
-class BiasModel(BaseModel):
-  def __init__(self, max_length, vocab_size, user_size, fancy_bias=True, use_nce_loss=True):
-
-    self.fancy_bias = fancy_bias
-    self.batch_size = 100
-    super(BiasModel, self).__init__(max_length, vocab_size, self.batch_size)
-
-    self.hash_size = 50000000
-    self.corrections = tf.Variable(tf.zeros([self.hash_size]), name='corrections')
-
-    self.username = tf.placeholder(
-      tf.int64, [self.batch_size], name='username')
-
-    hidden_size = 150
-    cell = tf.nn.rnn_cell.LSTMCell(hidden_size, state_is_tuple=True)
-    outputs, _ = tf.nn.dynamic_rnn(cell, self._inputs, dtype=tf.float32,
-                                   sequence_length=self.seq_len)
-
-    linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
-    self._weights = tf.matmul(self._word_embeddings, linear_map)
-
-    if use_nce_loss:
-      num_sampled=128
-      losses = []
-      for oo, yy, xx in zip(tf.unpack(outputs), tf.unpack(self.y), tf.unpack(self.x)):
-        self.xx = xx
-        yy = tf.expand_dims(yy, 1)
-        loss = self.mynce(oo, yy, num_sampled=num_sampled, num_classes=vocab_size)
-        losses.append(loss)
-      losses = tf.pack(losses)
-        
-    else:
-      # used for calculating perplexity
-      reshaped_outputs = tf.reshape(outputs, [-1, hidden_size])
-      reshaped_logits = tf.matmul(reshaped_outputs,
-                                  self._weights, transpose_b=True)
-      logits = tf.reshape(reshaped_logits, [self.batch_size, max_length, -1])
-      logits_with_bias = logits + self.base_bias
-
-      if fancy_bias:
-        next_word_idx = tf.reshape(tf.range(0, vocab_size), (1, 1, vocab_size))
-        prev_word_idx = self.x * vocab_size
-        pre_hash = tf.tile(tf.expand_dims(prev_word_idx, dim=2), (1, 1, vocab_size))
-        hash = tf.mod(pre_hash + next_word_idx, self.hash_size)
-        self.h = (next_word_idx, prev_word_idx, hash)
-        correction = tf.nn.embedding_lookup(self.corrections, hash)
-        
-        logits_with_bias += correction
-
-      losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits_with_bias,
-                                                              tf.squeeze(self.y))
-      self.logits = logits_with_bias
-      self.losses = losses
-
-    self.cost = tf.reduce_sum(losses * self._mask) / tf.reduce_sum(self._mask)
-
-    """
-    # next word prediction
-    self.wordid = tf.placeholder(tf.int32, [1], name='wordid')
-    self.prevstate_c = tf.placeholder(tf.float32, [1, cell.state_size.c],
-                                    name='prevstate')
-    self.prevstate_h = tf.placeholder(tf.float32, [1, cell.state_size.h],
-                                      name='prevstate2')
-    word_embedding = tf.nn.embedding_lookup(self._word_embeddings,
-                                            self.wordid)
-    code.interact(local=locals())
-    _o, hidden_out = cell(word_embedding, (self.prevstate_c, self.prevstate_h),
-                          scope='LSTMCell')
-    self.nextstate_h = hidden_out.h
-    self.nextstate_c = hidden_out.c
-    q = tf.matmul(tf.matmul(_o, linear_map), self._word_embeddings, 
-                  transpose_b=True)
-    next_word_logit = q + self.base_bias
-    self.next_word_prob = tf.nn.softmax(next_word_logit)
-    """
-
-  def mynce(self, inputs, labels, num_sampled,
-            num_classes, num_true=1,
-            remove_accidental_hits=False,
-            partition_strategy='mod',
-            name='nce_loss'):
-
-      logits, labels = self._compute_sampled_logits(
-        inputs, labels, num_sampled, num_classes,
-        num_true=num_true,
-        subtract_log_q=True,
-        remove_accidental_hits=remove_accidental_hits,
-        partition_strategy=partition_strategy,
-        name=name)
-      sampled_losses = tf.nn.sigmoid_cross_entropy_with_logits(
-        logits, labels, name="sampled_losses")
-      
-      return _sum_rows(sampled_losses)
-
-
-  def _compute_sampled_logits(self, inputs, labels, num_sampled,
-                              num_classes, num_true=1,
-                              subtract_log_q=True,
-                              remove_accidental_hits=False,
-                              partition_strategy="mod",
-                              name=None):
-
-    weights = self._weights
-    if not isinstance(weights, list):
-      weights = [weights]
-
-    with tf.name_scope(name, 'compute_sampled_logits', weights + [inputs, labels]):
-      if labels.dtype != tf.int64:
-        labels = tf.cast(labels, tf.int64)
-      prev = tf.cast(self.xx, tf.int64)
-      labels_flat = tf.reshape(labels, [-1])
-
-      # Sample the negative labels.                                                       
-      #   sampled shape: [num_sampled] tensor                                             
-      #   true_expected_count shape = [batch_size, 1] tensor                              
-      #   sampled_expected_count shape = [num_sampled] tensor
-      sampled_values = tf.nn.learned_unigram_candidate_sampler(
-        true_classes=labels,
-        num_true=1,
-        num_sampled=num_sampled,
-        unique=True,
-        range_max=num_classes)
-
-      sampled, true_expected_count, sampled_expected_count = sampled_values
-
-      true_hash = tf.mod(prev * num_classes + labels_flat, self.hash_size)
-      true_corrections = tf.nn.embedding_lookup(self.corrections, true_hash)
-      sampled_tile = tf.tile(tf.expand_dims(sampled, 0), [self.max_length, 1])
-      sampled_hash = tf.mod(tf.add(tf.expand_dims(prev * num_classes, 1),
-                                   sampled_tile), self.hash_size)
-      sampled_corrections = tf.nn.embedding_lookup(self.corrections, sampled_hash)
-
-      # labels_flat is a [batch_size * num_true] tensor                                   
-      # sampled is a [num_sampled] int tensor                                             
-      all_ids = tf.concat(0, [labels_flat, sampled])
-
-      # weights shape is [num_classes, dim]                                               
-      all_w = tf.nn.embedding_lookup(
-        weights, all_ids, partition_strategy=partition_strategy)
-
-      all_b = tf.nn.embedding_lookup(self.base_bias, all_ids, 
-                                     partition_strategy=partition_strategy)
-
-      # true_w shape is [batch_size * num_true, dim]                                      
-      # true_b is a [batch_size * num_true] tensor                                        
-      true_w = tf.slice(
-        all_w, [0, 0], tf.pack([tf.shape(labels_flat)[0], -1]))
-      true_b = tf.slice(all_b, [0], tf.shape(labels_flat))
-
-      # inputs shape is [batch_size, dim]                                                 
-      # true_w shape is [batch_size * num_true, dim]                                      
-      # row_wise_dots is [batch_size, num_true, dim]                                      
-      dim = tf.shape(true_w)[1:2]
-      new_true_w_shape = tf.concat(0, [[-1, num_true], dim])
-      row_wise_dots = tf.mul(
-        tf.expand_dims(inputs, 1),
-        tf.reshape(true_w, new_true_w_shape))
-      # We want the row-wise dot plus biases which yields a                               
-      # [batch_size, num_true] tensor of true_logits.                                     
-      dots_as_matrix = tf.reshape(row_wise_dots,
-                                  tf.concat(0, [[-1], dim]))
-      true_logits = tf.reshape(_sum_rows(dots_as_matrix), [-1, num_true])
-      true_b = tf.reshape(true_b, [-1, num_true])
-      true_logits += true_b
-      if self.fancy_bias:
-        true_logits += true_corrections
-      
-      # Lookup weights and biases for sampled labels.                                     
-      #   sampled_w shape is [num_sampled, dim]                                           
-      #   sampled_b is a [num_sampled] float tensor                                       
-      sampled_w = tf.slice(
-        all_w, tf.pack([tf.shape(labels_flat)[0], 0]), [-1, -1])
-      sampled_b = tf.slice(all_b, tf.shape(labels_flat), [-1])
-
-      # inputs has shape [batch_size, dim]                                                
-      # sampled_w has shape [num_sampled, dim]                                            
-      # sampled_b has shape [num_sampled]                                                 
-      # Apply X*W'+B, which yields [batch_size, num_sampled]                              
-      sampled_logits = tf.matmul(inputs,
-                                 sampled_w,
-                                 transpose_b=True) + sampled_b
-      if self.fancy_bias:
-        sampled_logits += sampled_corrections
-
-      if remove_accidental_hits:
-        acc_hits = tf.nn.compute_accidental_hits(
-          labels, sampled, num_true=num_true)
-        acc_indices, acc_ids, acc_weights = acc_hits
-
-        # This is how SparseToDense expects the indices.                                  
-        acc_indices_2d = tf.reshape(acc_indices, [-1, 1])
-        acc_ids_2d_int32 = tf.reshape(tf.cast(
-          acc_ids, dtypes.int32), [-1, 1])
-        sparse_indices = tf.concat(
-          1, [acc_indices_2d, acc_ids_2d_int32], "sparse_indices")
-        # Create sampled_logits_shape = [batch_size, num_sampled]                         
-        sampled_logits_shape = tf.concat(
-          0,
-          [tf.shape(labels)[:1], tf.expand_dims(num_sampled, 0)])
-        if sampled_logits.dtype != acc_weights.dtype:
-          acc_weights = tf.cast(acc_weights, sampled_logits.dtype)
-          sampled_logits += tf.sparse_to_dense(
-            sparse_indices, sampled_logits_shape, acc_weights,
-            default_value=0.0, validate_indices=False)
-
-      if subtract_log_q:
-        # Subtract log of Q(l), prior probability that l appears in sampled.              
-        true_logits -= tf.log(true_expected_count)
-        sampled_logits -= tf.log(sampled_expected_count)
-
-      # Construct output logits and labels. The true labels/logits start at col 0.        
-      out_logits = tf.concat(1, [true_logits, sampled_logits])
-      # true_logits is a float tensor, ones_like(true_logits) is a float tensor           
-      # of ones. We then divide by num_true to ensure the per-example labels sum          
-      # to 1.0, i.e. form a proper probability distribution.                              
-      out_labels = tf.concat(
-        1, [tf.ones_like(true_logits) / num_true,
-            tf.zeros_like(sampled_logits)])
-
-    return out_logits, out_labels
-
-def _sum_rows(x):
-  """Returns a vector summing up each row of the matrix x."""
-  # _sum_rows(x) is equivalent to math_ops.reduce_sum(x, 1) when x is                   
-  # a matrix.  The gradient of _sum_rows(x) is more efficient than                      
-  # reduce_sum(x, 1)'s gradient in today's implementation. Therefore,                   
-  # we use _sum_rows(x) in the nce_loss() computation since the loss                    
-  # is mostly used for training.                                                        
-  cols = tf.shape(x)[1]
-  ones_shape = tf.pack([cols, 1])
-  ones = tf.ones(ones_shape, x.dtype)
-  return tf.reshape(tf.matmul(x, ones), [-1])
