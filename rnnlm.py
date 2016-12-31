@@ -2,6 +2,7 @@ import argparse
 import bz2
 import code
 import collections
+import json
 import logging
 import numpy as np
 import os
@@ -76,8 +77,8 @@ else:
 if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
-model = StandardModel(max_len-1, len(vocab), use_nce_loss=False)
-# model = HyperModel(max_len-1, len(vocab), len(username_vocab), use_nce_loss=False)
+model = StandardModel(max_len-1, len(vocab), use_nce_loss=args.mode == 'train')
+# model = HyperModel(max_len-1, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)

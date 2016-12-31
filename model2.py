@@ -165,6 +165,19 @@ class BaseModel(object):
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
+  def ComputeLoss(self, outputs, linear_map):
+    reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
+    resized_outputs = tf.matmul(reshaped_outputs, linear_map, transpose_b=True)
+    reshaped_mask = tf.reshape(self._mask, [-1])
+    
+    reshaped_labels = tf.reshape(self.y, [-1])
+    reshaped_logits = tf.matmul(
+      resized_outputs, self._word_embeddings, transpose_b=True) + self.base_bias
+    reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+      reshaped_logits, reshaped_labels)
+    masked_loss = tf.mul(reshaped_loss, reshaped_mask)
+    return masked_loss
+
 class StandardModel(BaseModel):
 
   def __init__(self, max_length, vocab_size, use_nce_loss=True):
@@ -178,20 +191,11 @@ class StandardModel(BaseModel):
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
 
-    reshaped_outputs = tf.reshape(outputs, [-1, hidden_size])
-    resized_outputs = tf.matmul(reshaped_outputs, linear_map, transpose_b=True)
-    reshaped_mask = tf.reshape(self._mask, [-1])
-
     if use_nce_loss:
       losses = self.DoNCE(outputs, linear_map)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      reshaped_labels = tf.reshape(self.y, [-1])
-      reshaped_logits = tf.matmul(
-        resized_outputs, self._word_embeddings, transpose_b=True) + self.base_bias
-      reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        reshaped_logits, reshaped_labels)
-      masked_loss = tf.mul(reshaped_loss, reshaped_mask)
+      masked_loss = self.ComputeLoss(outputs, linear_map)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
 
@@ -214,26 +218,11 @@ class HyperModel(BaseModel):
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
 
-    reshaped_outputs = tf.reshape(outputs, [-1, hidden_size])
-    resized_outputs = tf.matmul(reshaped_outputs, linear_map, transpose_b=True)
-    reshaped_mask = tf.reshape(self._mask, [-1])
-    
     if use_nce_loss:
-      reshaped_labels = tf.reshape(self.y, [-1, 1])
-      num_sampled = 128
-
-      nce_loss = tf.nn.nce_loss(self._word_embeddings, self.base_bias, resized_outputs,
-                                reshaped_labels, num_sampled, vocab_size,
-                                sampled_values=sampled_values)
-      reshaped_loss = tf.reshape(nce_loss, [100, 35])
-      masked_loss = tf.mul(nce_loss, reshaped_mask)
+      losses = self.DoNCE(outputs, linear_map)
+      masked_loss = tf.mul(losses, self._mask)
     else:
-      reshaped_labels = tf.reshape(self.y, [-1])
-      reshaped_logits = tf.matmul(
-        resized_outputs, self._word_embeddings, transpose_b=True) + self.base_bias
-      reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        reshaped_logits, reshaped_labels)
-      masked_loss = tf.mul(reshaped_loss, reshaped_mask)
+      masked_loss = self.ComputeLoss(outputs, linear_map)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
     
