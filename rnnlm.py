@@ -12,7 +12,7 @@ import tensorflow as tf
 
 from vocab import Vocab
 from batcher import Dataset
-from model2 import HyperModel, StandardModel
+from model import HyperModel, StandardModel, MikilovModel
 
 
 parser = argparse.ArgumentParser()
@@ -31,7 +31,7 @@ if not os.path.exists(args.expdir):
 config = tf.ConfigProto(inter_op_parallelism_threads=10,
                         intra_op_parallelism_threads=10)
 
-def ReadData(filename, limit=2500000):
+def ReadData(filename, limit=5500000):
   usernames = []
   texts = []
 
@@ -77,8 +77,8 @@ else:
 if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
-model = StandardModel(max_len-1, len(vocab), use_nce_loss=args.mode == 'train')
-# model = HyperModel(max_len-1, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
+# model = StandardModel(max_len-1, len(vocab), use_nce_loss=args.mode == 'train')
+model = MikilovModel(max_len-1, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
@@ -101,7 +101,7 @@ def Train(expdir):
       model.x: s[:, :-1],
       model.y: s[:, 1:],
       model.seq_len: seq_len,
-      # model.username: usernames
+      model.username: usernames
     }
 
     a = session.run([model.cost, train_op], feed_dict)
@@ -157,7 +157,7 @@ def Eval(expdir):
         model.x: s[:, :-1],
         model.y: s[:, 1:],
         model.seq_len: seq_len,
-      # model.username: usernames
+        model.username: usernames
     }
 
     a = session.run([model.cost], feed_dict=feed_dict)[0]
