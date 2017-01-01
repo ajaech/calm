@@ -1,5 +1,4 @@
 import argparse
-import bz2
 import bunch
 import code
 import collections
@@ -7,8 +6,6 @@ import json
 import logging
 import numpy as np
 import os
-import pandas
-import random
 import tensorflow as tf
 
 from vocab import Vocab
@@ -33,32 +30,8 @@ if not os.path.exists(args.expdir):
 config = tf.ConfigProto(inter_op_parallelism_threads=10,
                         intra_op_parallelism_threads=10)
 
-def ReadData(filename, limit=5500000):
-  usernames = []
-  texts = []
-
-  with bz2.BZ2File(filename, 'r') as f:
-    for idnum, line in enumerate(f):
-      username, text = line.split('\t')
-
-      if idnum % 30000 == 0:
-        print idnum
-
-      if idnum > limit:
-        break
-
-      if args.mode == 'train' and int(idnum) % 10 < 1:
-        continue
-      if args.mode != 'train' and int(idnum) % 10 >= 1:
-        continue
-
-      usernames.append(username)
-      texts.append(['<S>'] + text.lower().split() + ['</S>'])
-
-  return usernames, texts
-
 filename = '/s0/ajaech/clean.tsv.bz'
-usernames, texts = ReadData(filename)
+usernames, texts = ReadData(filename, mode=args.mode)
 
 dataset = Dataset(max_len=params.max_len + 1, preshuffle=True)
 dataset.AddDataSource(usernames, texts)
@@ -79,7 +52,7 @@ if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
 # model = StandardModel(params.max_len, len(vocab), use_nce_loss=args.mode == 'train')
-model = MikilovModel(params, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
+model = HyperModel(params, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)

@@ -1,7 +1,33 @@
+import bz2
 import code
 import itertools
 import numpy as np
 import random
+
+
+def ReadData(filename, limit=5500000, mode='train'):
+  usernames = []
+  texts = []
+
+  with bz2.BZ2File(filename, 'r') as f:
+    for idnum, line in enumerate(f):
+      username, text = line.split('\t')
+
+      if idnum % 30000 == 0:
+        print idnum
+
+      if idnum > limit:
+        break
+
+      if mode == 'train' and int(idnum) % 10 < 1:
+        continue
+      if mode != 'train' and int(idnum) % 10 >= 1:
+        continue
+
+      usernames.append(username)
+      texts.append(['<S>'] + text.lower().split() + ['</S>'])
+
+  return usernames, texts
 
 
 class Dataset(object):
