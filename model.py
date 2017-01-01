@@ -53,24 +53,6 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
           initializer=tf.constant_initializer(bias_start, dtype=dtype))
   return res + biases
 
-_LSTMStateTuple = collections.namedtuple("LSTMStateTuple", ("c", "h"))
-
-
-class LSTMStateTuple(_LSTMStateTuple):
-  """Tuple used by LSTM Cells for `state_size`, `zero_state`, and output state.
-  Stores two elements: `(c, h)`, in that order.
-  Only used when `state_is_tuple=True`.
-  """
-  __slots__ = ()
-
-  @property
-  def dtype(self):
-    (c, h) = self
-    if not c.dtype == h.dtype:
-      raise TypeError("Inconsistent internal state: %s vs %s" %
-                      (str(c.dtype), str(h.dtype)))
-    return c.dtype
-
 
 class MikilovCell(rnn_cell.RNNCell):
 
@@ -82,7 +64,7 @@ class MikilovCell(rnn_cell.RNNCell):
 
   @property
   def state_size(self):
-    return LSTMStateTuple(self._num_units, self._num_units)
+    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
 
   @property
   def output_size(self):
@@ -109,7 +91,7 @@ class MikilovCell(rnn_cell.RNNCell):
                self._activation(j))
       new_h = self._activation(new_c) * tf.sigmoid(o)
 
-      new_state = LSTMStateTuple(new_c, new_h)
+      new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
 
       return new_h, new_state
     
@@ -124,7 +106,7 @@ class HyperCell(rnn_cell.RNNCell):
 
   @property
   def state_size(self):
-    return LSTMStateTuple(self._num_units, self._num_units)
+    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
     
   @property
   def output_size(self):
@@ -155,7 +137,7 @@ class HyperCell(rnn_cell.RNNCell):
                self._activation(j))
       new_h = self._activation(new_c) * tf.sigmoid(o)
 
-      new_state = LSTMStateTuple(new_c, new_h)
+      new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
 
       return new_h, new_state
 
