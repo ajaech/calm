@@ -1,5 +1,6 @@
 import argparse
 import bz2
+import bunch
 import code
 import collections
 import json
@@ -19,11 +20,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
 parser.add_argument('--mode', choices=['train', 'debug', 'eval'],
                     default='train')
-parser.add_argument('--model', choices=['multi', 'bias'],
-                    default='bias')
-parser.add_argument('--fancy_bias', default=False)
-parser.add_argument('--dataset', default='all')
+parser.add_argument('--params', type=argparse.FileType('r'), 
+                    default='default_params.json')
 args = parser.parse_args()
+
+params = bunch.Bunch(json.load(args.params))
+args.params.close()
 
 if not os.path.exists(args.expdir):
   os.mkdir(args.expdir)
@@ -57,9 +59,8 @@ def ReadData(filename, limit=5500000):
 
 filename = '/s0/ajaech/clean.tsv.bz'
 usernames, texts = ReadData(filename)
-max_len = 36
 
-dataset = Dataset(max_len=max_len, preshuffle=True)
+dataset = Dataset(max_len=params.max_len + 1, preshuffle=True)
 dataset.AddDataSource(usernames, texts)
 
 if args.mode == 'train':
@@ -77,8 +78,8 @@ else:
 if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
-# model = StandardModel(max_len-1, len(vocab), use_nce_loss=args.mode == 'train')
-model = MikilovModel(max_len-1, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
+# model = StandardModel(params.max_len, len(vocab), use_nce_loss=args.mode == 'train')
+model = MikilovModel(params, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)

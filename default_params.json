@@ -1,0 +1,7 @@
+{
+    "batch_size": 100,
+    "cell_size": 150,
+    "embedding_dims": 180,
+    "user_embedding_size": 40,
+    "max_len": 35
+}

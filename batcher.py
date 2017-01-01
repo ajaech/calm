@@ -51,11 +51,10 @@ class Dataset(object):
     """Convert list of words to matrix of word ids."""
     out = []
     for line in lines:
-      if len(line) > pad_length:
-        line = line[:pad_length]
-      elif len(line) < pad_length:
-        line += ['}'] * (pad_length - len(line))
-      out.append([vocab[w] for w in line])
+      ids = [vocab[w] for w in line[:pad_length]]
+      if len(ids) < pad_length:
+        ids += [vocab['}']] * (pad_length - len(ids))
+      out.append(ids)
     return np.array(out)
 
   def GetNumBatches(self):

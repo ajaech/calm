@@ -163,14 +163,14 @@ class HyperCell(rnn_cell.RNNCell):
 class BaseModel(object):
   """Hold the code that is shared between all model varients."""
 
-  def __init__(self, max_length, vocab_size, batch_size):
-    self.max_length = max_length
+  def __init__(self, params, vocab_size):
+    self.max_length = params.max_len
     self.vocab_size = vocab_size
-    self.x = tf.placeholder(tf.int32, [batch_size, max_length], name='x')
-    self.y = tf.placeholder(tf.int64, [batch_size, max_length], name='y')
-    self.seq_len = tf.placeholder(tf.int64, [batch_size], name='seq_len')
+    self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
+    self.y = tf.placeholder(tf.int64, [params.batch_size, self.max_length], name='y')
+    self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
 
-    self._embedding_dims = 180
+    self._embedding_dims = params.embedding_dims
     self._word_embeddings = tf.get_variable('word_embeddings',
                                             [vocab_size, self._embedding_dims])
 
@@ -179,16 +179,15 @@ class BaseModel(object):
     
     # make a mask
     lengths_transposed = tf.expand_dims(tf.to_int32(self.seq_len), 1)
-    lengths_tiled = tf.tile(lengths_transposed, [1, max_length])
-    r = tf.range(0, max_length, 1)
+    lengths_tiled = tf.tile(lengths_transposed, [1, self.max_length])
+    r = tf.range(0, self.max_length, 1)
     range_row = tf.expand_dims(r, 0)
-    range_tiled = tf.tile(range_row, [batch_size, 1])
+    range_tiled = tf.tile(range_row, [params.batch_size, 1])
     indicator = tf.less(range_tiled, lengths_tiled)
-    sz = [batch_size, max_length]
+    sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
   def DoNCE(self, weights, linear_map, num_sampled=256):
-
     w_list = tf.unpack(weights, axis=1)
     losses = []
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
@@ -222,9 +221,9 @@ class BaseModel(object):
 
 class StandardModel(BaseModel):
 
-  def __init__(self, max_length, vocab_size, use_nce_loss=True):
-    self.batch_size = 100
-    super(StandardModel, self).__init__(max_length, vocab_size, self.batch_size)
+  def __init__(self, params, vocab_size, use_nce_loss=True):
+    self.batch_size = params.batch_size
+    super(StandardModel, self).__init__(params, vocab_size)
 
     hidden_size = 150
     cell = rnn_cell.LSTMCell(hidden_size)
@@ -243,11 +242,10 @@ class StandardModel(BaseModel):
 
 class MikilovModel(BaseModel):
 
-  def __init__(self, max_length, vocab_size, user_size, use_nce_loss=True):
-    self.batch_size = 100
-    super(MikilovModel, self).__init__(max_length, vocab_size, self.batch_size)
+  def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
+    super(MikilovModel, self).__init__(params, vocab_size)
 
-    self.username = tf.placeholder(tf.int64, [self.batch_size], name='username')
+    self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
     user_embeddings = tf.get_variable('user_embeddings', [user_size, 80])
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
@@ -270,11 +268,10 @@ class MikilovModel(BaseModel):
 
 class HyperModel(BaseModel):
 
-  def __init__(self, max_length, vocab_size, user_size, use_nce_loss=True):
-    self.batch_size = 100
-    super(HyperModel, self).__init__(max_length, vocab_size, self.batch_size)
+  def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
+    super(HyperModel, self).__init__(params, vocab_size)
     
-    self.username = tf.placeholder(tf.int64, [self.batch_size], name='username')
+    self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
     user_embeddings = tf.get_variable('user_embeddings', [user_size, 80])
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
