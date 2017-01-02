@@ -5,7 +5,8 @@ import numpy as np
 import random
 
 
-def ReadData(filename, limit=5500000, mode='train'):
+def ReadData(filename, limit=5500000, mode='train', worker=None,
+             num_workers=None):
   usernames = []
   texts = []
 
@@ -18,6 +19,9 @@ def ReadData(filename, limit=5500000, mode='train'):
 
       if idnum > limit:
         break
+
+      if worker is not None and int(idnum) % num_workers != worker:
+        continue
 
       if mode == 'train' and int(idnum) % 10 < 1:
         continue
