@@ -14,7 +14,7 @@ def ReadData(filename, limit=5500000, mode='train', worker=None,
     for idnum, line in enumerate(f):
       username, text = line.split('\t')
 
-      if idnum % 30000 == 0:
+      if idnum % 100000 == 0:
         print idnum
 
       if idnum > limit:
@@ -36,7 +36,7 @@ def ReadData(filename, limit=5500000, mode='train', worker=None,
 
 class Dataset(object):
 
-  def __init__(self, max_len=35, preshuffle=True, name='unnamed'):
+  def __init__(self, max_len=35, batch_size=100, preshuffle=True, name='unnamed'):
     """Init the dataset object.
 
     Args:
@@ -48,7 +48,7 @@ class Dataset(object):
     self._usernames = []
     self.name = name
 
-    self.batch_size = 100
+    self.batch_size = batch_size
     self.preshuffle = preshuffle
     self._max_len = max_len
 

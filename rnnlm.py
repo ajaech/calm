@@ -9,7 +9,7 @@ import os
 import tensorflow as tf
 
 from vocab import Vocab
-from batcher import Dataset
+from batcher import Dataset, ReadData
 from model import HyperModel, StandardModel, MikilovModel
 
 
@@ -33,7 +33,7 @@ config = tf.ConfigProto(inter_op_parallelism_threads=10,
 filename = '/s0/ajaech/clean.tsv.bz'
 usernames, texts = ReadData(filename, mode=args.mode)
 
-dataset = Dataset(max_len=params.max_len + 1, preshuffle=True)
+dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
 dataset.AddDataSource(usernames, texts)
 
 if args.mode == 'train':

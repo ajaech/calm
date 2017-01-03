@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+import shutil
 
 import tensorflow as tf
 
@@ -12,6 +13,8 @@ from model import HyperModel
 
 tf.app.flags.DEFINE_string("expdir", "",
                            "Where to save all the files")
+tf.app.flags.DEFINE_string("params", "default_params.json",
+                           "Where to get the hyperprameters from")
 
 # Flags for defining the tf.train.ClusterSpec
 tf.app.flags.DEFINE_string("ps_hosts", "",
@@ -22,6 +25,7 @@ tf.app.flags.DEFINE_string("worker_hosts", "",
 # Flags for defining the tf.train.Server
 tf.app.flags.DEFINE_string("job_name", "", "One of 'ps', 'worker'")
 tf.app.flags.DEFINE_integer("task_index", 0, "Index of task within the job")
+tf.app.flags.DEFINE_integer("worker_threads", 8, "Threads per worker")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -38,20 +42,15 @@ def main(_):
                            task_index=FLAGS.task_index)
 
 
-  with open('default_params.json', 'r') as f:
+  with open(FLAGS.params, 'r') as f:
     params = bunch.Bunch(json.load(f))
+  shutil.copy(FLAGS.params, os.path.join(FLAGS.expdir, 'params.json'))
 
   if FLAGS.job_name == "ps":
 
     if FLAGS.task_index == 0:
-      if not os.path.exists(FLAGS.expdir):
-        os.mkdir(FLAGS.expdir)
-      else:
-        print 'Error: expdir already exists'
-        exit()
-
       usernames, texts = ReadData('/n/falcon/s0/ajaech/clean.tsv.bz', mode='train')
-      dataset = Dataset(max_len=params.max_len + 1, preshuffle=True)
+      dataset = Dataset(max_len=params.max_len + 1, batch_size=params.batch_size, preshuffle=True)
       dataset.AddDataSource(usernames, texts)
     
       vocab = Vocab.MakeFromData(texts, min_count=20)
@@ -73,7 +72,7 @@ def main(_):
       worker=FLAGS.task_index,
       num_workers=len(worker_hosts)
     )
-    dataset = Dataset(max_len=params.max_len + 1, preshuffle=True)
+    dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
     dataset.AddDataSource(usernames, texts)
 
     while not os.path.exists(os.path.join(FLAGS.expdir, 'READY')):
@@ -95,13 +94,7 @@ def main(_):
       global_step = tf.Variable(0)
       model = HyperModel(params, len(vocab), len(username_vocab), use_nce_loss=True)
 
-      optimizer = tf.train.AdagradOptimizer(0.01)
-      """optimizer = tf.train.SyncReplicasOptimizer(
-        optimizer,
-        replicas_to_aggregate=3,
-        total_num_replicas=len(worker_hosts),
-        replica_id=FLAGS.task_index,
-        name='syncer')"""
+      optimizer = tf.train.AdamOptimizer(0.001)
       train_op = optimizer.minimize(
         model.cost, global_step=global_step)
 
@@ -115,6 +108,10 @@ def main(_):
 
     # Create a "supervisor", which oversees the training process.
     print 'creating supervisor'
+
+    config = tf.ConfigProto(inter_op_parallelism_threads=FLAGS.worker_threads,
+                            intra_op_parallelism_threads=FLAGS.worker_threads)
+
     sv = tf.train.Supervisor(is_chief=(FLAGS.task_index == 0),
                              logdir=FLAGS.expdir,
                              init_op=init_op,
@@ -125,7 +122,7 @@ def main(_):
 
     # The supervisor takes care of session initialization, restoring from
     # a checkpoint, and closing when done or an error occurs.
-    with sv.managed_session(server.target) as sess:
+    with sv.managed_session(server.target, config=config) as sess:
       # Loop until the supervisor shuts down or 1000000 steps have completed.
       step = 0
       while not sv.should_stop() and step < 1000000:
