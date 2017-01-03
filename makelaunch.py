@@ -4,15 +4,12 @@ expdir = '/s0/ajaech/exptest'
 worker_threads = 8
 
 ps_hosts = (
-    'localhost:2233',
-    'localhost:2234'
+    'localhost:2243',
 )
 
 worker_hosts = (
-    'localhost:2222',
-    'localhost:2223',
-    'localhost:2224',
-    'localhost:2225',
+    'localhost:2242',
+    'localhost:2245',
 )
 
 print '#!/usr/bin/bash\n'
@@ -49,3 +46,7 @@ for idx, w in enumerate(worker_hosts):
     print '\t--worker_threads={0} \\'.format(worker_threads)
     print ' 2> {0} &'.format(os.path.join(expdir, 'errlog.worker{0}'.format(idx)))
     print '\n\n'
+
+
+print 'wait'
+

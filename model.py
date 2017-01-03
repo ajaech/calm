@@ -54,7 +54,7 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
   return res + biases
 
 
-class MikilovCell(rnn_cell.RNNCell):
+class MikolovCell(rnn_cell.RNNCell):
 
   def __init__(self, num_units, user_embeds):
     self._num_units = num_units
@@ -78,7 +78,7 @@ class MikilovCell(rnn_cell.RNNCell):
       concat = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
 
       biases = tf.get_variable(
-        'mikilov_biases', 
+        'mikolov_biases', 
         [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
 
       delta = tf.matmul(self.user_embeds, biases)
@@ -215,17 +215,17 @@ class StandardModel(BaseModel):
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
 
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map)
+      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
       masked_loss = self.ComputeLoss(outputs, linear_map)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
 
-class MikilovModel(BaseModel):
+class MikolovModel(BaseModel):
 
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
-    super(MikilovModel, self).__init__(params, vocab_size)
+    super(MikolovModel, self).__init__(params, vocab_size)
 
     self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
     user_embeddings = tf.get_variable('user_embeddings', [user_size, 80])
@@ -233,14 +233,14 @@ class MikilovModel(BaseModel):
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
 
     hidden_size = 150
-    cell = MikilovCell(hidden_size, uembeds)
+    cell = MikolovCell(hidden_size, uembeds)
     outputs, _ = tf.nn.dynamic_rnn(cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
 
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map)
+      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
       masked_loss = self.ComputeLoss(outputs, linear_map)
@@ -266,7 +266,7 @@ class HyperModel(BaseModel):
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
 
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map)
+      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
       masked_loss = self.ComputeLoss(outputs, linear_map)

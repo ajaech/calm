@@ -10,7 +10,7 @@ import tensorflow as tf
 
 from vocab import Vocab
 from batcher import Dataset, ReadData
-from model import HyperModel, StandardModel, MikilovModel
+from model import HyperModel, StandardModel, MikolovModel
 
 
 parser = argparse.ArgumentParser()
@@ -33,6 +33,9 @@ config = tf.ConfigProto(inter_op_parallelism_threads=10,
 filename = '/s0/ajaech/clean.tsv.bz'
 usernames, texts = ReadData(filename, mode=args.mode)
 
+batch_size = params.batch_size
+if args.mode != 'train':
+  params.batch_size = 20
 dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
 dataset.AddDataSource(usernames, texts)
 

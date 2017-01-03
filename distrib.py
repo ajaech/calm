@@ -9,7 +9,7 @@ import tensorflow as tf
 
 from vocab import Vocab
 from batcher import ReadData, Dataset
-from model import HyperModel
+from model import HyperModel, MikolovModel
 
 tf.app.flags.DEFINE_string("expdir", "",
                            "Where to save all the files")
