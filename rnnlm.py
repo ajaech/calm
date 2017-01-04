@@ -78,7 +78,8 @@ def Train(expdir):
       model.x: s[:, :-1],
       model.y: s[:, 1:],
       model.seq_len: seq_len,
-      model.username: usernames
+      model.username: usernames,
+      model.dropout_keep_prob: params.dropout_keep_prob
     }
 
     a = session.run([model.cost, train_op], feed_dict)

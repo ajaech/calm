@@ -1,9 +1,10 @@
 {
     "nce_samples": 300,
-    "batch_size": 2000,
+    "batch_size": 500,
     "cell_size": 200,
     "embedding_dims": 128,
     "user_embedding_size": 40,
     "max_len": 35,
-    "model": "mikolov"
+    "model": "mikolov",
+    "dropout_keep_prob": 0.5
 }

@@ -158,6 +158,8 @@ class BaseModel(object):
 
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
     self.base_bias = tf.get_variable('base_bias', [vocab_size])
+
+    self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
     # make a mask
     lengths_transposed = tf.expand_dims(tf.to_int32(self.seq_len), 1)
@@ -207,9 +209,12 @@ class StandardModel(BaseModel):
     self.batch_size = params.batch_size
     super(StandardModel, self).__init__(params, vocab_size)
 
-    hidden_size = 150
+    hidden_size = params.cell_size
     cell = rnn_cell.LSTMCell(hidden_size)
-    outputs, _ = tf.nn.dynamic_rnn(cell, self._inputs, dtype=tf.float32,
+    regularized_cell = rnn_cell.DropoutWrapper(
+      cell, output_keep_prob=self.dropout_keep_prob,
+      input_keep_prob=self.dropout_keep_prob)
+    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
@@ -228,13 +233,17 @@ class MikolovModel(BaseModel):
     super(MikolovModel, self).__init__(params, vocab_size)
 
     self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
-    user_embeddings = tf.get_variable('user_embeddings', [user_size, 80])
+    user_embeddings = tf.get_variable(
+      'user_embeddings', [user_size, params.user_embedding_size])
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
 
-    hidden_size = 150
+    hidden_size = params.cell_size
     cell = MikolovCell(hidden_size, uembeds)
-    outputs, _ = tf.nn.dynamic_rnn(cell, self._inputs, dtype=tf.float32,
+    regularized_cell = rnn_cell.DropoutWrapper(
+      cell, output_keep_prob=self.dropout_keep_prob,
+      input_keep_prob=self.dropout_keep_prob)
+    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
@@ -254,13 +263,17 @@ class HyperModel(BaseModel):
     super(HyperModel, self).__init__(params, vocab_size)
     
     self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
-    user_embeddings = tf.get_variable('user_embeddings', [user_size, 80])
+    user_embeddings = tf.get_variable(
+      'user_embeddings', [user_size, params.user_embedding_size])
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
 
-    hidden_size = 150
+    hidden_size = params.cell_size
     cell = HyperCell(hidden_size, uembeds)
-    outputs, _ = tf.nn.dynamic_rnn(cell, self._inputs, dtype=tf.float32,
+    regularized_cell = rnn_cell.DropoutWrapper(
+      cell, output_keep_prob=self.dropout_keep_prob,
+      input_keep_prob=self.dropout_keep_prob)
+    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
     linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
@@ -272,4 +285,3 @@ class HyperModel(BaseModel):
       masked_loss = self.ComputeLoss(outputs, linear_map)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
-    

@@ -49,7 +49,7 @@ def main(_):
   if FLAGS.job_name == "ps":
 
     if FLAGS.task_index == 0:
-      usernames, texts = ReadData('/n/falcon/s0/ajaech/clean.tsv.bz', mode='train')
+      usernames, texts = ReadData('/s0/ajaech/clean.tsv.bz', mode='train')
       dataset = Dataset(max_len=params.max_len + 1, batch_size=params.batch_size, preshuffle=True)
       dataset.AddDataSource(usernames, texts)
     
@@ -72,7 +72,8 @@ def main(_):
       worker=FLAGS.task_index,
       num_workers=len(worker_hosts)
     )
-    dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
+    dataset = Dataset(max_len=params.max_len + 1, preshuffle=True,
+                      batch_size=params.batch_size)
     dataset.AddDataSource(usernames, texts)
 
     while not os.path.exists(os.path.join(FLAGS.expdir, 'READY')):
@@ -92,7 +93,9 @@ def main(_):
         cluster=cluster)):
 
       global_step = tf.Variable(0)
-      model = HyperModel(params, len(vocab), len(username_vocab), use_nce_loss=True)
+      models = {'hyper': HyperModel, 'mikolov': MikolovModel}
+      model = models[params.model](params, len(vocab), len(username_vocab),
+                                   use_nce_loss=True)
 
       optimizer = tf.train.AdamOptimizer(0.001)
       train_op = optimizer.minimize(
@@ -109,9 +112,6 @@ def main(_):
     # Create a "supervisor", which oversees the training process.
     print 'creating supervisor'
 
-    config = tf.ConfigProto(inter_op_parallelism_threads=FLAGS.worker_threads,
-                            intra_op_parallelism_threads=FLAGS.worker_threads)
-
     sv = tf.train.Supervisor(is_chief=(FLAGS.task_index == 0),
                              logdir=FLAGS.expdir,
                              init_op=init_op,
@@ -122,9 +122,12 @@ def main(_):
 
     # The supervisor takes care of session initialization, restoring from
     # a checkpoint, and closing when done or an error occurs.
+    config = tf.ConfigProto(inter_op_parallelism_threads=FLAGS.worker_threads,
+                            intra_op_parallelism_threads=FLAGS.worker_threads)
     with sv.managed_session(server.target, config=config) as sess:
       # Loop until the supervisor shuts down or 1000000 steps have completed.
       step = 0
+      start_time = time.time()
       while not sv.should_stop() and step < 1000000:
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
@@ -136,14 +139,16 @@ def main(_):
           model.x: s[:, :-1],
           model.y: s[:, 1:],
           model.seq_len: seq_len,
-          model.username: usernames
+          model.username: usernames,
+          model.dropout_keep_prob: params.dropout_keep_prob
         }        
         
         cost, _, step = sess.run([model.cost, train_op, global_step], 
                                  feed_dict=feed_dict)
 
         if step % 10 == 0:
-          logging.info({'iter': step, 'cost': float(cost)})
+          logging.info({'iter': step, 'cost': float(cost), 
+                        'time': time.time() - start_time})
           print step, cost
 
     # Ask for all the services to stop.
