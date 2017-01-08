@@ -82,7 +82,8 @@ def main(_):
     print 'READY'
 
     vocab = Vocab.Load(os.path.join(FLAGS.expdir, 'word_vocab.pickle'))
-    username_vocab = Vocab.Load(os.path.join(FLAGS.expdir, 'username_vocab.pickle'))
+    username_vocab = Vocab.Load(os.path.join(FLAGS.expdir, 
+                                             'username_vocab.pickle'))
     print 'preparing dataset'
     dataset.Prepare(vocab, username_vocab)
 
@@ -97,12 +98,14 @@ def main(_):
       model = models[params.model](params, len(vocab), len(username_vocab),
                                    use_nce_loss=True)
 
-      optimizer = tf.train.AdamOptimizer(0.001)
-      train_op = optimizer.minimize(
-        model.cost, global_step=global_step)
+      tvars = tf.trainable_variables()
+      optimizer = tf.train.AdamOptimizer(0.0001)
+      grads, _ = tf.clip_by_global_norm(tf.gradients(model.cost, tvars), 5.0)
+      train_op = optimizer.apply_gradients(zip(grads, tvars),
+                                           global_step=global_step)
 
       saver = tf.train.Saver()
-      # init_op = tf.global_variables_initializer()
+
       init_op = tf.initialize_all_variables()
 
     logging.basicConfig(
@@ -111,14 +114,13 @@ def main(_):
 
     # Create a "supervisor", which oversees the training process.
     print 'creating supervisor'
-
     sv = tf.train.Supervisor(is_chief=(FLAGS.task_index == 0),
                              logdir=FLAGS.expdir,
                              init_op=init_op,
                              summary_op=None,
                              saver=saver,
                              global_step=global_step,
-                             save_model_secs=600)
+                             save_model_secs=900)
 
     # The supervisor takes care of session initialization, restoring from
     # a checkpoint, and closing when done or an error occurs.

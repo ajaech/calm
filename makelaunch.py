@@ -1,16 +1,17 @@
 import os
+import random
 
-expdir = '/g/ssli/transitory/ajaech/rnnlm/exp01'
+expdir = '/g/ssli/transitory/ajaech/rnnlm/bigbatch'
 worker_threads = 8
 
-ps_hosts = (
-    'localhost:2243',
-)
+num_servers = 1
+num_workers = 3
 
-worker_hosts = (
-    'localhost:2242',
-    'localhost:2245',
-)
+# pick random ports and hope that they are unused
+ps_hosts = ['localhost:{0}'.format(random.randint(20000, 40000)) 
+            for _ in range(num_servers)]
+worker_hosts = ['localhost:{0}'.format(random.randint(20000, 40000))
+                for _ in range(num_workers)]
 
 print '#!/usr/bin/bash\n'
 
