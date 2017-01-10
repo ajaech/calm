@@ -1,9 +1,9 @@
-import code
-import collections
+import sys
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
+import code
 
 
 def _linear(args, output_size, bias, bias_start=0.0, scope=None):
@@ -171,12 +171,10 @@ class BaseModel(object):
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
-  def DoNCE(self, weights, linear_map, num_sampled=256):
+  def DoNCE(self, weights, out_embeddings, num_sampled=256, user_embeddings=None):
     w_list = tf.unpack(weights, axis=1)
     losses = []
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
-      w_mapped = tf.matmul(w, linear_map, transpose_b=True)
-
       sampled_values = tf.nn.learned_unigram_candidate_sampler(
         true_classes=y,
         num_true=1,
@@ -184,20 +182,23 @@ class BaseModel(object):
         unique=True,
         range_max=self.vocab_size)
 
-      nce_loss = tf.nn.nce_loss(self._word_embeddings, self.base_bias, 
-                                w_mapped, y, num_sampled, self.vocab_size, 
+      if user_embeddings is not None:
+        w = tf.concat(1, [w, user_embeddings])
+
+      nce_loss = tf.nn.nce_loss(out_embeddings, self.base_bias, 
+                                w, y, num_sampled, self.vocab_size, 
                                 sampled_values=sampled_values)        
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
-  def ComputeLoss(self, outputs, linear_map):
+  def ComputeLoss(self, outputs, out_embeddings, user_embeddings=None):
     reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
-    resized_outputs = tf.matmul(reshaped_outputs, linear_map, transpose_b=True)
+    code.interact(local=locals())
     reshaped_mask = tf.reshape(self._mask, [-1])
     
     reshaped_labels = tf.reshape(self.y, [-1])
     reshaped_logits = tf.matmul(
-      resized_outputs, self._word_embeddings, transpose_b=True) + self.base_bias
+      reshaped_outputs, out_embeddings, transpose_b=True) + self.base_bias
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
@@ -238,21 +239,22 @@ class MikolovModel(BaseModel):
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
 
-    hidden_size = params.cell_size
-    cell = MikolovCell(hidden_size, uembeds)
+    self._out_embeddings = tf.get_variable(
+      'out_embeddings', [vocab_size, params.user_embedding_size + params.cell_size])
+
+    cell = MikolovCell(params.cell_size, uembeds)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
-
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
+      losses = self.DoNCE(outputs, self._out_embeddings, num_sampled=params.nce_samples,
+                          user_embeddings=uembeds)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      masked_loss = self.ComputeLoss(outputs, linear_map)
+      masked_loss = self.ComputeLoss(outputs, self._out_embeddings)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
 
@@ -268,20 +270,43 @@ class HyperModel(BaseModel):
     self._user_embeddings = user_embeddings
     uembeds = tf.nn.embedding_lookup(user_embeddings, self.username)
 
-    hidden_size = params.cell_size
-    cell = HyperCell(hidden_size, uembeds)
+    self._out_embeddings = tf.get_variable(
+      'out_embeddings', [vocab_size, params.user_embedding_size + params.cell_size])
+
+    cell = HyperCell(params.cell_size, uembeds)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
-
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
+      losses = self.DoNCE(outputs, self._out_embeddings, num_sampled=params.nce_samples,
+                          user_embeddings=uembeds)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      masked_loss = self.ComputeLoss(outputs, linear_map)
+      masked_loss = self.ComputeLoss(outputs, self._out_embeddings)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
+
+
+def PrintParams(param_list, handle=sys.stdout.write):
+  """Print the names of the parameters and their sizes. 
+
+  Args:
+    param_list: list of tensors
+    handle: where to write the param sizes to
+  """
+  handle('NETWORK SIZE REPORT\n')
+  param_count = 0
+  fmt_str = '{0: <25}\t{1: >12}\t{2: >12,}\n'
+  for p in param_list:
+    shape = p.get_shape()
+    shape_str = 'x'.join([str(x.value) for x in shape])
+    handle(fmt_str.format(p.name, shape_str, np.prod(shape).value))
+    param_count += np.prod(shape).value
+  handle(''.join(['-'] * 60))
+  handle('\n')
+  handle(fmt_str.format('total', '', param_count))
+  if handle==sys.stdout.write:
+    sys.stdout.flush()
