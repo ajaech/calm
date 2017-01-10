@@ -19,16 +19,25 @@ parser.add_argument('--mode', choices=['train', 'debug', 'eval'],
                     default='train')
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
+parser.add_argument('--threads', type=int, default=12)
 args = parser.parse_args()
-
-params = bunch.Bunch(json.load(args.params))
-args.params.close()
 
 if not os.path.exists(args.expdir):
   os.mkdir(args.expdir)
 
-config = tf.ConfigProto(inter_op_parallelism_threads=10,
-                        intra_op_parallelism_threads=10)
+param_filename = os.path.join(args.expdir, 'params.json')
+if args.mode == 'train':
+  param_dict = json.load(args.params)
+  params = bunch.Bunch(param_dict)
+  with open(param_filename, 'w') as f:
+    json.dump(param_dict, f)
+else:
+  with open(param_filename, 'r') as f:
+    params = bunch.Bunch(json.load(f))
+args.params.close()
+
+config = tf.ConfigProto(inter_op_parallelism_threads=args.threads,
+                        intra_op_parallelism_threads=args.threads)
 
 filename = '/s0/ajaech/clean.tsv.bz'
 usernames, texts = ReadData(filename, mode=args.mode)
@@ -54,8 +63,12 @@ else:
 if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
+
+models = {'hyper': HyperModel, 'mikolov': MikolovModel}
+model = models[params.model](params, len(vocab), len(username_vocab), 
+                             use_nce_loss=args.mode == 'train')
+
 # model = StandardModel(params.max_len, len(vocab), use_nce_loss=args.mode == 'train')
-model = HyperModel(params, len(vocab), len(username_vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
@@ -65,7 +78,7 @@ def Train(expdir):
                       level=logging.INFO)
   tvars = tf.trainable_variables()
   grads, _ = tf.clip_by_global_norm(tf.gradients(model.cost, tvars), 5.0)
-  optimizer = tf.train.AdamOptimizer(0.001)
+  optimizer = tf.train.AdamOptimizer(params.learning_rate)
   train_op = optimizer.apply_gradients(zip(grads, tvars))
 
   print('initalizing')
@@ -98,6 +111,15 @@ def Train(expdir):
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
+  m = model
+  sess = session
+  v = vocab
+
+  for var in tf.trainable_variables():
+    values = var.eval(session=session)
+    print '{0}\t{1:.3f}\t{2:.3f}'.format(var.name, values.max(), values.min())
+
+  return
   current_word = '<S>'
   prevstate_h = np.zeros((1, 150))
   prevstate_c = np.zeros((1, 150))
