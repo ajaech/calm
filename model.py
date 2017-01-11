@@ -229,25 +229,22 @@ class BaseModel(object):
 
 class StandardModel(BaseModel):
 
-  def __init__(self, params, vocab_size, use_nce_loss=True):
+  def __init__(self, params, vocab_size, _, use_nce_loss=True):
     self.batch_size = params.batch_size
     super(StandardModel, self).__init__(params, vocab_size, enable_user_embeds=False)
 
-    hidden_size = params.cell_size
-    cell = rnn_cell.LSTMCell(hidden_size)
+    cell = rnn_cell.LSTMCell(params.embedding_dims)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    linear_map = tf.get_variable('linear_map', [self._embedding_dims, hidden_size])
-
     if use_nce_loss:
-      losses = self.DoNCE(outputs, linear_map, num_sampled=params.nce_samples)
+      losses = self.DoNCE(outputs, self._word_embeddings, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      masked_loss = self.ComputeLoss(outputs, linear_map)
+      masked_loss = self.ComputeLoss(outputs, self._word_embeddings)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
 

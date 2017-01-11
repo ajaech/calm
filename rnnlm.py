@@ -4,9 +4,11 @@ import code
 import collections
 import json
 import logging
+import random
 import numpy as np
 import os
 import tensorflow as tf
+import time
 
 from vocab import Vocab
 from batcher import Dataset, ReadData
@@ -39,7 +41,8 @@ args.params.close()
 config = tf.ConfigProto(inter_op_parallelism_threads=args.threads,
                         intra_op_parallelism_threads=args.threads)
 
-filename = '/s0/ajaech/clean.tsv.bz'
+filename = '/n/falcon/s0/ajaech/clean.tsv.bz'
+time.sleep(random.randint(0, 60))
 usernames, texts = ReadData(filename, mode=args.mode)
 
 batch_size = params.batch_size
@@ -64,11 +67,10 @@ if args.mode != 'debug':
   dataset.Prepare(vocab, username_vocab)
 
 
-models = {'hyper': HyperModel, 'mikolov': MikolovModel}
+models = {'hyper': HyperModel, 'mikolov': MikolovModel, 
+          'standard': StandardModel}
 model = models[params.model](params, len(vocab), len(username_vocab), 
                              use_nce_loss=args.mode == 'train')
-
-# model = StandardModel(params.max_len, len(vocab), use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
@@ -84,7 +86,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(800000):
+  for idx in xrange(200000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
