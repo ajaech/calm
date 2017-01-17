@@ -202,7 +202,7 @@ class BaseModel(object):
         range_max=self.vocab_size)
 
       if user_embeddings is not None:
-        w = tf.concat(1, [w, user_embeddings])
+        w = tf.concat(1, [user_embeddings, w])
 
       nce_loss = tf.nn.nce_loss(out_embeddings, self.base_bias, 
                                 w, y, num_sampled, self.vocab_size, 
@@ -215,7 +215,7 @@ class BaseModel(object):
 
     if user_embeddings is not None:
       replicated = tf.concat(0, [user_embeddings for _ in range(35)])
-      reshaped_outputs = tf.concat(1, [reshaped_outputs, replicated])
+      reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
 
     reshaped_mask = tf.reshape(self._mask, [-1])
     
