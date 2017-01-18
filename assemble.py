@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import pandas
@@ -5,17 +6,17 @@ import pandas
 
 results = []
 
-for i in range(16):
-  filename = 'exps/exp{0}/ppl.txt'.format(i)
+for dirname in glob.glob('exps/exp*'):
+  filename = os.path.join(dirname, 'ppl.txt')
   if os.path.exists(filename):
     with open(filename, 'r') as f:
       lines = f.readlines()
       if len(lines):
         ppl = lines[-1].split()[-1]
 
-        print ppl, i
+        print ppl, dirname
 
-        with open('settings/{0}.json'.format(i), 'r') as g:
+        with open(os.path.join(dirname, 'params.json'), 'r') as g:
           params = json.load(g)
 
           params['ppl'] = float(ppl)

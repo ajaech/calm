@@ -13,19 +13,19 @@ def GetRandomSetting():
   model_params['nce_samples'] = random.choice(range(100, 500, 50))
   model_params['batch_size'] = random.choice([100, 200, 500])
 
-  model_params['embedding_dims'] = random.choice([64, 128, 196, 256, 400])
-  model_params['user_embedding_size'] = random.choice([20, 40, 80])
+  model_params['embedding_dims'] = random.choice([196, 256, 340, 400])
+  model_params['user_embedding_size'] = random.choice([10, 15, 30])
 
   model_params['max_len'] = 35
 
   model_params['model'] = random.choice(['hyper', 'mikolov', 'standard'])
 
-  model_params['learning_rate'] = random.choice([0.001, 0.005, 0.0001])
+  model_params['learning_rate'] = random.choice([0.001, 0.005])
 
   return model_params
 
 
-for i in xrange(200):
+for i in xrange(25, 50):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:
