@@ -20,6 +20,7 @@ for dirname in glob.glob('exps/exp*'):
           params = json.load(g)
 
           params['ppl'] = float(ppl)
+          params['dir'] = dirname
 
           results.append(params)
 
