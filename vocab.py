@@ -110,7 +110,7 @@ class Vocab(object):
 
   def GetWords(self):
     """Get a list of words in the vocabulary."""
-    return self.word_to_idx.keys()
+    return [self.idx_to_word[i] for i in xrange(len(self.word_to_idx))]
   
   def LookupIdx(self, token):
     token = self._normalize(token)

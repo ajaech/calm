@@ -25,4 +25,5 @@ for dirname in glob.glob('exps/exp*'):
           results.append(params)
 
 df = pandas.DataFrame(results)
+df = df.sort_values('ppl')
 df.to_csv('results.csv')

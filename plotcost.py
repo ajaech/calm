@@ -46,7 +46,7 @@ def PlotIt(filename, var, diff=False, invert=False, smooth=1.0):
   # do smoothing
   values = np.convolve(values, 1.0 / smooth * np.ones(smooth),
                        mode='valid').T
-  print values[-1]
+  print values[-1], filename
 
   # remove nans
   nan_idx = ~np.isnan(values)

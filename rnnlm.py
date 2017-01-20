@@ -2,13 +2,13 @@ import argparse
 import bunch
 import code
 import collections
+import gzip
 import json
 import logging
 import random
 import numpy as np
 import os
 import tensorflow as tf
-import time
 
 from vocab import Vocab
 from batcher import Dataset, ReadData
@@ -17,8 +17,8 @@ from model import HyperModel, StandardModel, MikolovModel
 
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
-parser.add_argument('--mode', choices=['train', 'debug', 'eval'],
-                    default='train')
+parser.add_argument('--mode', default='train',
+                    choices=['train', 'debug', 'eval', 'dump'])
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
 parser.add_argument('--threads', type=int, default=12)
@@ -41,15 +41,16 @@ args.params.close()
 config = tf.ConfigProto(inter_op_parallelism_threads=args.threads,
                         intra_op_parallelism_threads=args.threads)
 
-filename = '/n/falcon/s0/ajaech/clean.tsv.bz'
-time.sleep(random.randint(0, 60))
-usernames, texts = ReadData(filename, mode=args.mode)
-
 batch_size = params.batch_size
 if args.mode != 'train':
   params.batch_size = 20
-dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
-dataset.AddDataSource(usernames, texts)
+
+if args.mode in ('train', 'eval'):
+  filename = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
+  usernames, texts = ReadData(filename, mode=args.mode)
+  dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
+  dataset.AddDataSource(usernames, texts)
+  dataset.Prepare(vocab, username_vocab)
 
 if args.mode == 'train':
   vocab = Vocab.MakeFromData(texts, min_count=20)
@@ -62,9 +63,6 @@ if args.mode == 'train':
 else:
   vocab = Vocab.Load(os.path.join(args.expdir, 'word_vocab.pickle'))
   username_vocab = Vocab.Load(os.path.join(args.expdir, 'username_vocab.pickle'))
-
-if args.mode != 'debug':
-  dataset.Prepare(vocab, username_vocab)
 
 
 models = {'hyper': HyperModel, 'mikolov': MikolovModel, 
@@ -86,7 +84,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(200000):
+  for idx in xrange(50000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -108,6 +106,54 @@ def Train(expdir):
 
       if idx % 1000 == 0:
         saver.save(session, os.path.join(expdir, 'model.bin'))
+
+
+def DumpEmbeddings(expdir):
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+  word = model._word_embeddings.eval(session=session)
+  user = model._user_embeddings.eval(session=session)
+  v = vocab
+  uv = username_vocab
+
+  with gzip.open(os.path.join(expdir, 'embeddings.tsv.gz'), 'w') as f:
+    for w in word:
+      f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
+      f.write('\n')
+
+  with gzip.open(os.path.join(expdir, 'userembeddings.tsv.gz'), 'w') as f:
+    for w in user:
+      f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
+      f.write('\n')
+
+
+def Debug(expdir):
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+  m = model
+  sess = session
+  v = vocab
+  uv = username_vocab
+
+  uword = m._word_embeddings[:, :10]
+  uu = m._user_embeddings
+
+  subreddit = tf.placeholder(tf.int32, ())
+
+  scores = tf.matmul(uword, tf.expand_dims(uu[subreddit, :], 1))
+
+  def Process(subname):
+    s = session.run(scores, {subreddit: uv[subname]})
+    vals = np.squeeze(s.T).argsort()
+
+    print '~~~{0}~~~'.format(subname)
+    topwords = [v[vals[-1-i]] for i in range(10)]
+    print ' '.join(topwords)
+
+  for subname in ['exmormon', 'AskMen', 'AskWomen', 'Music', 'aww',
+                  'dogs', 'cats', 'worldnews', 'tifu', 'books', 'WTF',
+                  'RealGirls', 'relationships', 'Android']:
+    Process(subname)
 
 
 def Greedy(expdir):
@@ -147,12 +193,9 @@ def Eval(expdir):
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  v = vocab
-
   total_word_count = 0
   total_log_prob = 0
-  for pos in xrange(dataset.GetNumBatches()):
-    print pos
+  for pos in xrange(min(dataset.GetNumBatches(), 300)):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -162,16 +205,13 @@ def Eval(expdir):
         model.username: usernames
     }
 
-    a = session.run([model.cost], feed_dict=feed_dict)[0]
-      
-
-    m = model
-    sess = session
+    cost = session.run(model.cost, feed_dict=feed_dict)
 
     total_word_count += sum(seq_len)
-    total_log_prob += float(a * sum(seq_len))
+    total_log_prob += float(cost * sum(seq_len))
+    ppl = np.exp(total_log_prob / total_word_count)
+    print '{0}\t{1:.3f}'.format(pos, ppl)
 
-    print np.exp(total_log_prob / total_word_count)
 
 if args.mode == 'train':
   Train(args.expdir)
@@ -180,4 +220,7 @@ if args.mode == 'eval':
   Eval(args.expdir)
 
 if args.mode == 'debug':
-  Greedy(args.expdir)
+  Debug(args.expdir)
+
+if args.mode == 'dump':
+  DumpEmbeddings(args.expdir)
