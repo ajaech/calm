@@ -3,7 +3,7 @@ import numpy as np
 import os
 import random
 
-threads = 12
+threads = 14
 
 def GetRandomSetting():
   """Gets a random parameter setting."""
@@ -13,7 +13,8 @@ def GetRandomSetting():
   model_params['nce_samples'] = random.choice(range(100, 500, 50))
   model_params['batch_size'] = random.choice([100, 200, 500])
 
-  model_params['embedding_dims'] = random.choice([196, 256, 340, 400])
+  model_params['embedding_dims'] = random.choice([180, 196, 256])
+  model_params['cell_size'] = random.choice([200, 250, 300])
   model_params['user_embedding_size'] = random.choice([10, 15, 30])
 
   model_params['max_len'] = 35
@@ -25,11 +26,11 @@ def GetRandomSetting():
   return model_params
 
 
-for i in xrange(25, 50):
+for i in xrange(25):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:
     json.dump(d, f)
 
-  print 'python rnnlm.py exps/exp{0} --params={1} --threads={2}'.format(
+  print 'python rnnlm.py exps/exp{0} --params={1} --threads={2} 2> exps/exp{0}/error.log'.format(
     i, fname, threads)

@@ -190,6 +190,18 @@ class BaseModel(object):
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
+  def OutputHelper(self, outputs, linear_proj, params, use_nce_loss=True):
+    proj_out = tf.einsum('ijk,kl->ijl', outputs, linear_proj) 
+    
+    if use_nce_loss:
+      losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
+      masked_loss = tf.mul(losses, self._mask)
+    else:
+      masked_loss = self.ComputeLoss(proj_out, self._word_embeddings)
+      self.masked_loss = masked_loss
+    self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
+
+
   def DoNCE(self, weights, out_embeddings, num_sampled=256, user_embeddings=None):
     w_list = tf.unpack(weights, axis=1)
     losses = []
@@ -233,42 +245,30 @@ class StandardModel(BaseModel):
     self.batch_size = params.batch_size
     super(StandardModel, self).__init__(params, vocab_size, enable_user_embeds=False)
 
-    cell = rnn_cell.LSTMCell(params.embedding_dims)
+    cell = rnn_cell.LSTMCell(params.cell_size)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    if use_nce_loss:
-      losses = self.DoNCE(outputs, self._word_embeddings, num_sampled=params.nce_samples)
-      masked_loss = tf.mul(losses, self._mask)
-    else:
-      masked_loss = self.ComputeLoss(outputs, self._word_embeddings)
-      self.masked_loss = masked_loss
-    self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
+    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
+    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
+
 
 class MikolovModel(BaseModel):
 
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
     super(MikolovModel, self).__init__(params, vocab_size, enable_user_embeds=True, user_size=user_size)
 
-    cell = MikolovCell(params.embedding_dims, self._uembeds)
+    cell = MikolovCell(params.cell_size, self._uembeds)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
-
-    if use_nce_loss:
-      losses = self.DoNCE(outputs, self._word_embeddings, num_sampled=params.nce_samples,
-                          user_embeddings=self._uembeds)
-      masked_loss = tf.mul(losses, self._mask)
-    else:
-      masked_loss = self.ComputeLoss(outputs, self._word_embeddings,
-                                     user_embeddings=self._uembeds)
-      self.masked_loss = masked_loss
-    self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
+    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
+    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
 
 
 class HyperModel(BaseModel):
@@ -276,22 +276,15 @@ class HyperModel(BaseModel):
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
     super(HyperModel, self).__init__(params, vocab_size, enable_user_embeds=True, user_size=user_size)
 
-    cell = HyperCell(params.embedding_dims, self._uembeds)
+    cell = HyperCell(params.cell_size, self._uembeds)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    if use_nce_loss:
-      losses = self.DoNCE(outputs, self._word_embeddings, num_sampled=params.nce_samples,
-                          user_embeddings=self._uembeds)
-      masked_loss = tf.mul(losses, self._mask)
-    else:
-      masked_loss = self.ComputeLoss(outputs, self._word_embeddings,
-                                     user_embeddings=self._uembeds)
-      self.masked_loss = masked_loss
-    self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)
+    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
+    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
 
 
 def PrintParams(param_list, handle=sys.stdout.write):

@@ -50,7 +50,6 @@ if args.mode in ('train', 'eval'):
   usernames, texts = ReadData(filename, mode=args.mode)
   dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
   dataset.AddDataSource(usernames, texts)
-  dataset.Prepare(vocab, username_vocab)
 
 if args.mode == 'train':
   vocab = Vocab.MakeFromData(texts, min_count=20)
@@ -74,6 +73,8 @@ saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
 
 def Train(expdir):
+  dataset.Prepare(vocab, username_vocab)
+
   logging.basicConfig(filename=os.path.join(expdir, 'logfile.txt'),
                       level=logging.INFO)
   tvars = tf.trainable_variables()
@@ -84,7 +85,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(50000):
+  for idx in xrange(40000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -135,7 +136,7 @@ def Debug(expdir):
   v = vocab
   uv = username_vocab
 
-  uword = m._word_embeddings[:, :10]
+  uword = m._word_embeddings[:, :params.user_embedding_size]
   uu = m._user_embeddings
 
   subreddit = tf.placeholder(tf.int32, ())
@@ -190,6 +191,8 @@ def GetText(s, seq_len):
   return ' '.join(ws)
 
 def Eval(expdir):
+  dataset.Prepare(vocab, username_vocab)
+
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
