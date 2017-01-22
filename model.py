@@ -115,7 +115,6 @@ class HyperCell(rnn_cell.RNNCell):
     """Long short-term memory cell (LSTM)."""
 
     with vs.variable_scope(scope or "basic_lstm_cell", reuse=reuse):
-      print tf.get_variable_scope().name
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
       concat = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
@@ -198,11 +197,9 @@ class BaseModel(object):
                                        outputs.get_shape()[1].value, -1])
                                     
     if use_nce_loss:
-      print 'using nce loss'
       losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      print 'using traditional loss'
       masked_loss = self.ComputeLoss(proj_out, self._word_embeddings)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
@@ -301,12 +298,11 @@ class HyperModel(BaseModel):
     
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
-      print tf.get_variable_scope().name
       result, (self.next_c, self.next_h) = cell(prev_embed[:, params.user_embedding_size:], 
                                                 state, reuse=True)
     projected = tf.matmul(result, linear_proj)
     logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
-    self.next_idx = tf.argmax(logits, 0)
+    self.next_idx = tf.argmax(logits, 1)
 
 
 def PrintParams(param_list, handle=sys.stdout.write):

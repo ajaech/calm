@@ -172,7 +172,7 @@ def Greedy(expdir):
   for i in xrange(10):
     a = session.run([model.next_idx, model.next_c, model.next_h],
                     {
-                      model.username: np.array([username_vocab['WTF']]),
+                      model.username: np.array([username_vocab['worldnews']]),
                       model.prev_word: vocab[current_word],
                       model.prev_c: prevstate_c,
                       model.prev_h: prevstate_h
