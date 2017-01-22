@@ -1,3 +1,4 @@
+#! /usr/bin/env python
 # This file is a collection of hacks to plot the training cost
 # from the log files.
 import code

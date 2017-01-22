@@ -111,9 +111,11 @@ class HyperCell(rnn_cell.RNNCell):
   def output_size(self):
     return self._num_units
 
-  def __call__(self, inputs, state, scope=None):
+  def __call__(self, inputs, state, scope=None, reuse=None):
     """Long short-term memory cell (LSTM)."""
-    with vs.variable_scope(scope or "basic_lstm_cell"):
+
+    with vs.variable_scope(scope or "basic_lstm_cell", reuse=reuse):
+      print tf.get_variable_scope().name
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
       concat = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
@@ -121,9 +123,8 @@ class HyperCell(rnn_cell.RNNCell):
       adaptation_weights = tf.get_variable(
         'adaptation_weights', 
         [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-      adaptation_bias = tf.Variable(np.ones(4 * self._num_units), name='adaptation_bias',
-                                    dtype=tf.float32)
-
+      adaptation_bias = tf.get_variable('adaptation_bias', [4 * self._num_units],
+                                        initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
       adaptation_coeff = tf.nn.relu(tf.matmul(self.user_embeds, adaptation_weights) 
                                     + adaptation_bias)
 
@@ -158,7 +159,7 @@ class BaseModel(object):
     self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
 
     self._embedding_dims = params.embedding_dims
-    self.username = tf.placeholder(tf.int64, [params.batch_size], name='username')
+    self.username = tf.placeholder(tf.int64, [None], name='username')
     if enable_user_embeds:
       self._user_embeddings = tf.get_variable(
         'user_embeddings', [user_size, params.user_embedding_size])
@@ -191,12 +192,17 @@ class BaseModel(object):
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
   def OutputHelper(self, outputs, linear_proj, params, use_nce_loss=True):
-    proj_out = tf.einsum('ijk,kl->ijl', outputs, linear_proj) 
-    
+    reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
+    projected = tf.matmul(reshaped_outputs, linear_proj)
+    proj_out =  tf.reshape(projected, [outputs.get_shape()[0].value,
+                                       outputs.get_shape()[1].value, -1])
+                                    
     if use_nce_loss:
+      print 'using nce loss'
       losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
+      print 'using traditional loss'
       masked_loss = self.ComputeLoss(proj_out, self._word_embeddings)
       self.masked_loss = masked_loss
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
@@ -285,6 +291,22 @@ class HyperModel(BaseModel):
 
     linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
     self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
+
+    # Do greedy decoding
+    self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
+    self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
+    self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
+    prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
+    prev_embed = tf.expand_dims(prev_embed, 0)   
+    
+    state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
+    with vs.variable_scope('RNN', reuse=True):
+      print tf.get_variable_scope().name
+      result, (self.next_c, self.next_h) = cell(prev_embed[:, params.user_embedding_size:], 
+                                                state, reuse=True)
+    projected = tf.matmul(result, linear_proj)
+    logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
+    self.next_idx = tf.argmax(logits, 0)
 
 
 def PrintParams(param_list, handle=sys.stdout.write):

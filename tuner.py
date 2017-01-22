@@ -10,12 +10,12 @@ def GetRandomSetting():
   model_params = {}
 
   model_params['dropout_keep_prob'] = random.choice(np.arange(0.5, 1.0, 0.1))
-  model_params['nce_samples'] = random.choice(range(100, 500, 50))
-  model_params['batch_size'] = random.choice([100, 200, 500])
+  model_params['nce_samples'] = random.choice(range(100, 300, 50))
+  model_params['batch_size'] = random.choice([100, 200, 300])
 
-  model_params['embedding_dims'] = random.choice([180, 196, 256])
+  model_params['embedding_dims'] = random.choice([128, 180, 196, 256])
   model_params['cell_size'] = random.choice([200, 250, 300])
-  model_params['user_embedding_size'] = random.choice([10, 15, 30])
+  model_params['user_embedding_size'] = random.choice([10, 15, 30, 40])
 
   model_params['max_len'] = 35
 
@@ -26,11 +26,11 @@ def GetRandomSetting():
   return model_params
 
 
-for i in xrange(25):
+for i in xrange(30, 50):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:
     json.dump(d, f)
 
-  print 'python rnnlm.py exps/exp{0} --params={1} --threads={2} 2> exps/exp{0}/error.log'.format(
+  print './rnnlm.py exps/exp{0} --params={1} --threads={2} 2> exps/exp{0}.error.log'.format(
     i, fname, threads)

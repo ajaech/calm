@@ -1,6 +1,6 @@
+#!/usr/bin/env python
 import argparse
 import bunch
-import code
 import collections
 import gzip
 import json
@@ -164,27 +164,24 @@ def Greedy(expdir):
   sess = session
   v = vocab
 
-  for var in tf.trainable_variables():
-    values = var.eval(session=session)
-    print '{0}\t{1:.3f}\t{2:.3f}'.format(var.name, values.max(), values.min())
-
-  return
   current_word = '<S>'
-  prevstate_h = np.zeros((1, 150))
-  prevstate_c = np.zeros((1, 150))
+  prevstate_h = np.zeros((1, params.cell_size))
+  prevstate_c = np.zeros((1, params.cell_size))
 
+  words = []
   for i in xrange(10):
+    a = session.run([model.next_idx, model.next_c, model.next_h],
+                    {
+                      model.username: np.array([username_vocab['WTF']]),
+                      model.prev_word: vocab[current_word],
+                      model.prev_c: prevstate_c,
+                      model.prev_h: prevstate_h
+                    })
+    current_word_id, prevstate_h, prevstate_c = a
+    current_word = vocab.idx_to_word[current_word_id[0]]
+    words.append(current_word)
+  print ' '.join(words)
 
-    a = session.run([model.next_word_prob, model.nextstate_h, model.nextstate_c],
-                    {model.wordid: np.array([vocab[current_word]]),
-                     model.prevstate_c: prevstate_c,
-                     model.prevstate_h: prevstate_h
-                     })
-    probs, prevstate_h, prevstate_c = a
-    current_word_id = np.argmax(probs)
-    current_word = vocab.idx_to_word[current_word_id]
-    print current_word
-    
 
 def GetText(s, seq_len):
   ws = [vocab.idx_to_word[s[0, i]] for i in range(seq_len)]
@@ -223,7 +220,7 @@ if args.mode == 'eval':
   Eval(args.expdir)
 
 if args.mode == 'debug':
-  Debug(args.expdir)
+  Greedy(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
