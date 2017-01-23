@@ -242,6 +242,24 @@ class BaseModel(object):
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
     return masked_loss
 
+  def CreateDecodingGraph(self, cell, linear_proj, params):
+    self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
+    self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
+    self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
+    prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
+    prev_embed = tf.expand_dims(prev_embed, 0)
+
+    if params['model'] != 'standard':
+      prev_embed = prev_embed[:, params.user_embedding_size:]
+    
+    state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
+    with vs.variable_scope('RNN', reuse=True):
+      result, (self.next_c, self.next_h) = cell(prev_embed, state)
+    projected = tf.matmul(result, linear_proj)
+    logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
+    self.next_idx = tf.argmax(logits, 1)
+    self.next_prob = tf.nn.softmax(logits)
+
 class StandardModel(BaseModel):
 
   def __init__(self, params, vocab_size, _, use_nce_loss=True):
@@ -257,6 +275,7 @@ class StandardModel(BaseModel):
 
     linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
     self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
+    self.CreateDecodingGraph(cell, linear_proj, params)
 
 
 class MikolovModel(BaseModel):
@@ -273,7 +292,9 @@ class MikolovModel(BaseModel):
     linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
     self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
 
+    self.CreateDecodingGraph(cell, linaer_proj, params)
 
+    
 class HyperModel(BaseModel):
 
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
@@ -289,20 +310,7 @@ class HyperModel(BaseModel):
     linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
     self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
 
-    # Do greedy decoding
-    self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
-    self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
-    self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
-    prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
-    prev_embed = tf.expand_dims(prev_embed, 0)   
-    
-    state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
-    with vs.variable_scope('RNN', reuse=True):
-      result, (self.next_c, self.next_h) = cell(prev_embed[:, params.user_embedding_size:], 
-                                                state, reuse=True)
-    projected = tf.matmul(result, linear_proj)
-    logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
-    self.next_idx = tf.argmax(logits, 1)
+    self.CreateDecodingGraph(cell, linear_proj, params)
 
 
 def PrintParams(param_list, handle=sys.stdout.write):

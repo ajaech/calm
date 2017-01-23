@@ -85,7 +85,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(40000):
+  for idx in xrange(60000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -148,7 +148,8 @@ def Debug(expdir):
     vals = np.squeeze(s.T).argsort()
 
     print '~~~{0}~~~'.format(subname)
-    topwords = [v[vals[-1-i]] for i in range(10)]
+    topwords = ['{0} {1:.2f}'.format(v[vals[-1-i]], s[vals[-1-i]][0])
+                for i in range(10)]
     print ' '.join(topwords)
 
   for subname in ['exmormon', 'AskMen', 'AskWomen', 'Music', 'aww',
@@ -160,27 +161,31 @@ def Debug(expdir):
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  m = model
-  sess = session
-  v = vocab
+  def Process(subname):
+    current_word = '<S>'
+    prevstate_h = np.zeros((1, params.cell_size))
+    prevstate_c = np.zeros((1, params.cell_size))
 
-  current_word = '<S>'
-  prevstate_h = np.zeros((1, params.cell_size))
-  prevstate_c = np.zeros((1, params.cell_size))
+    words = []
+    for i in xrange(10):
+      a = session.run([model.next_idx, model.next_c, model.next_h],
+                      {
+                        model.username: np.array([username_vocab[subname]]),
+                        model.prev_word: vocab[current_word],
+                        model.prev_c: prevstate_c,
+                        model.prev_h: prevstate_h
+                      })
+      current_word_id, prevstate_h, prevstate_c = a
+      current_word = vocab.idx_to_word[current_word_id[0]]
+      words.append(current_word)
+      if current_word == '</S>':
+        break
+    print '~~~{0}~~~'.format(subname)
+    print ' '.join(words)
 
-  words = []
-  for i in xrange(10):
-    a = session.run([model.next_idx, model.next_c, model.next_h],
-                    {
-                      model.username: np.array([username_vocab['worldnews']]),
-                      model.prev_word: vocab[current_word],
-                      model.prev_c: prevstate_c,
-                      model.prev_h: prevstate_h
-                    })
-    current_word_id, prevstate_h, prevstate_c = a
-    current_word = vocab.idx_to_word[current_word_id[0]]
-    words.append(current_word)
-  print ' '.join(words)
+  for n in ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews', 'AskReddit',
+            'GoneWild', 'tifu', 'WTF']:
+    Process(n)
 
 
 def GetText(s, seq_len):
