@@ -12,7 +12,7 @@ import tensorflow as tf
 
 from vocab import Vocab
 from batcher import Dataset, ReadData
-from model import HyperModel, StandardModel, MikolovModel
+from model import HyperModel
 
 
 parser = argparse.ArgumentParser()
@@ -64,13 +64,12 @@ else:
   username_vocab = Vocab.Load(os.path.join(args.expdir, 'username_vocab.pickle'))
 
 
-models = {'hyper': HyperModel, 'mikolov': MikolovModel, 
-          'standard': StandardModel}
-model = models[params.model](params, len(vocab), len(username_vocab), 
-                             use_nce_loss=args.mode == 'train')
+model = HyperModel(params, len(vocab), len(username_vocab), 
+                   use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
+
 
 def Train(expdir):
   dataset.Prepare(vocab, username_vocab)
@@ -85,7 +84,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(60000):
+  for idx in xrange(90000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {

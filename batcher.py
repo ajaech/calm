@@ -4,7 +4,7 @@ import numpy as np
 import random
 
 
-def ReadData(filename, limit=5500000, mode='train', worker=None,
+def ReadData(filename, limit=10000000, mode='train', worker=None,
              num_workers=None):
   usernames = []
   texts = []

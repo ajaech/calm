@@ -97,11 +97,13 @@ class MikolovCell(rnn_cell.RNNCell):
 
 class HyperCell(rnn_cell.RNNCell):
 
-  def __init__(self, num_units, user_embeds):
+  def __init__(self, num_units, user_embeds, mikolov_adapt=False, hyper_adapt=False):
     self._num_units = num_units
     self._forget_bias = 1.0
     self._activation = tf.tanh
     self.user_embeds = user_embeds
+    self.mikolov_adapt = mikolov_adapt
+    self.hyper_adapt = hyper_adapt
 
   @property
   def state_size(self):
@@ -117,23 +119,24 @@ class HyperCell(rnn_cell.RNNCell):
     with vs.variable_scope(scope or "basic_lstm_cell", reuse=reuse):
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
-      concat = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
+      adapted = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
 
-      adaptation_weights = tf.get_variable(
-        'adaptation_weights', 
-        [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-      adaptation_bias = tf.get_variable('adaptation_bias', [4 * self._num_units],
-                                        initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
-      adaptation_coeff = tf.nn.relu(tf.matmul(self.user_embeds, adaptation_weights) 
-                                    + adaptation_bias)
-
-      biases = tf.get_variable(
-        'mikolov_biases', 
-        [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-
-      delta = tf.matmul(self.user_embeds, biases)
-
-      adapted = tf.mul(adaptation_coeff, concat) + delta
+      if self.hyper_adapt:
+        adaptation_weights = tf.get_variable(
+          'adaptation_weights', 
+          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+        adaptation_bias = tf.get_variable('adaptation_bias', [4 * self._num_units],
+                                          initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
+        adaptation_coeff = tf.nn.relu(tf.matmul(self.user_embeds, adaptation_weights) 
+                                      + adaptation_bias)
+        adapted = tf.mul(adaptation_coeff, adapted)
+        
+      if self.mikolov_adapt:
+        biases = tf.get_variable(
+          'mikolov_biases', 
+          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+        delta = tf.matmul(self.user_embeds, biases)
+        adapted += delta
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
       i, j, f, o = tf.split(1, 4, adapted)
@@ -150,7 +153,7 @@ class HyperCell(rnn_cell.RNNCell):
 class BaseModel(object):
   """Hold the code that is shared between all model varients."""
 
-  def __init__(self, params, vocab_size, enable_user_embeds=True, user_size=None):
+  def __init__(self, params, vocab_size, user_size=None):
     self.max_length = params.max_len
     self.vocab_size = vocab_size
     self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
@@ -159,21 +162,23 @@ class BaseModel(object):
 
     self._embedding_dims = params.embedding_dims
     self.username = tf.placeholder(tf.int64, [None], name='username')
+    enable_user_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
+                          or params.use_softmax_adaptation)
     if enable_user_embeds:
       self._user_embeddings = tf.get_variable(
         'user_embeddings', [user_size, params.user_embedding_size])
       self._uembeds = tf.nn.embedding_lookup(self._user_embeddings, self.username)
       
+    if params.use_softmax_adaptation:
       self._word_embeddings = tf.get_variable(
         'word_embeddings', [vocab_size, self._embedding_dims + params.user_embedding_size])
-
     else:
       self._word_embeddings = tf.get_variable('word_embeddings',
                                               [vocab_size, self._embedding_dims])
 
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
 
-    if enable_user_embeds:  # chop off the user embedding part
+    if params.use_softmax_adaptation:  # chop off the user embedding part
       self._inputs = self._inputs[:, :, params.user_embedding_size:]
 
     self.base_bias = tf.get_variable('base_bias', [vocab_size])
@@ -249,7 +254,7 @@ class BaseModel(object):
     prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
     prev_embed = tf.expand_dims(prev_embed, 0)
 
-    if params['model'] != 'standard':
+    if params.use_softmax_adaptation:
       prev_embed = prev_embed[:, params.user_embedding_size:]
     
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
@@ -260,47 +265,14 @@ class BaseModel(object):
     self.next_idx = tf.argmax(logits, 1)
     self.next_prob = tf.nn.softmax(logits)
 
-class StandardModel(BaseModel):
 
-  def __init__(self, params, vocab_size, _, use_nce_loss=True):
-    self.batch_size = params.batch_size
-    super(StandardModel, self).__init__(params, vocab_size, enable_user_embeds=False)
-
-    cell = rnn_cell.LSTMCell(params.cell_size)
-    regularized_cell = rnn_cell.DropoutWrapper(
-      cell, output_keep_prob=self.dropout_keep_prob,
-      input_keep_prob=self.dropout_keep_prob)
-    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
-                                   sequence_length=self.seq_len)
-
-    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
-    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
-    self.CreateDecodingGraph(cell, linear_proj, params)
-
-
-class MikolovModel(BaseModel):
-
-  def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
-    super(MikolovModel, self).__init__(params, vocab_size, enable_user_embeds=True, user_size=user_size)
-
-    cell = MikolovCell(params.cell_size, self._uembeds)
-    regularized_cell = rnn_cell.DropoutWrapper(
-      cell, output_keep_prob=self.dropout_keep_prob,
-      input_keep_prob=self.dropout_keep_prob)
-    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
-                                   sequence_length=self.seq_len)
-    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
-    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
-
-    self.CreateDecodingGraph(cell, linaer_proj, params)
-
-    
 class HyperModel(BaseModel):
 
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
-    super(HyperModel, self).__init__(params, vocab_size, enable_user_embeds=True, user_size=user_size)
+    super(HyperModel, self).__init__(params, vocab_size, user_size=user_size)
 
-    cell = HyperCell(params.cell_size, self._uembeds)
+    cell = HyperCell(params.cell_size, self._uembeds, mikolov_adapt=params.use_mikolov_adaptation,
+                     hyper_adapt=params.use_hyper_adaptation)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
