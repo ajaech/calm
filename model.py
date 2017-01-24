@@ -53,48 +53,6 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
   return res + biases
 
 
-class MikolovCell(rnn_cell.RNNCell):
-
-  def __init__(self, num_units, user_embeds):
-    self._num_units = num_units
-    self._forget_bias = 1.0
-    self._activation = tf.tanh
-    self.user_embeds = user_embeds
-
-  @property
-  def state_size(self):
-    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
-
-  @property
-  def output_size(self):
-    return self._num_units
-
-  def __call__(self, inputs, state, scope=None):
-    """Long short-term memory cell (LSTM)."""
-    with vs.variable_scope(scope or "basic_lstm_cell"):
-      # Parameters of gates are concatenated into one multiply for efficiency.                                                                                                        
-      c, h = state
-      concat = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
-
-      biases = tf.get_variable(
-        'mikolov_biases', 
-        [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-
-      delta = tf.matmul(self.user_embeds, biases)
-      adapted = concat + delta
-
-      # i = input_gate, j = new_input, f = forget_gate, o = output_gate                                                                                                               
-      i, j, f, o = tf.split(1, 4, adapted)
-
-      new_c = (c * tf.sigmoid(f + self._forget_bias) + tf.sigmoid(i) *
-               self._activation(j))
-      new_h = self._activation(new_c) * tf.sigmoid(o)
-
-      new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
-
-      return new_h, new_state
-    
-
 class HyperCell(rnn_cell.RNNCell):
 
   def __init__(self, num_units, user_embeds, mikolov_adapt=False, hyper_adapt=False):
