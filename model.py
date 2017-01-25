@@ -229,7 +229,10 @@ class HyperModel(BaseModel):
   def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
     super(HyperModel, self).__init__(params, vocab_size, user_size=user_size)
 
-    cell = HyperCell(params.cell_size, self._uembeds, mikolov_adapt=params.use_mikolov_adaptation,
+    uembeds = None
+    if params.use_mikolov_adaptation or params.use_hyper_adaptation:
+      uembeds = self._uembeds
+    cell = HyperCell(params.cell_size, uembeds, mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
