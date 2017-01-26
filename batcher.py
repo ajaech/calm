@@ -1,3 +1,4 @@
+import argparse
 import bz2
 import itertools
 import numpy as np
@@ -5,7 +6,7 @@ import random
 
 
 def ReadData(filename, limit=10000000, mode='train', worker=None,
-             num_workers=None):
+             num_workers=None, scramble_usernames=False):
   usernames = []
   texts = []
 
@@ -29,6 +30,9 @@ def ReadData(filename, limit=10000000, mode='train', worker=None,
 
       usernames.append(username)
       texts.append(['<S>'] + text.lower().split() + ['</S>'])
+
+    if scramble_usernames:
+      random.shuffle(usernames)
 
   return usernames, texts
 
@@ -110,3 +114,17 @@ class Dataset(object):
 
     return (self.sentences[idx, :], self.seq_lens[idx], 
             self.usernames[idx])
+
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--filename', default='/s0/ajaech/reddit.tsv.bz2')
+  parser.add_argument('--mode', choices=['train', 'eval'])
+  parser.add_argument('--out')
+  args = parser.parse_args()
+
+  _, texts = ReadData(args.filename, mode=args.mode)
+  with open(args.out, 'w') as f:
+    for t in texts:
+      f.write(' '.join(t[1:-1]))
+      f.write('\n')

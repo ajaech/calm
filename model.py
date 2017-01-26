@@ -221,7 +221,7 @@ class BaseModel(object):
     projected = tf.matmul(result, linear_proj)
     logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
     self.next_idx = tf.argmax(logits, 1)
-    self.next_prob = tf.nn.softmax(logits)
+    self.next_prob = tf.nn.softmax(logits / 0.5)
 
 
 class HyperModel(BaseModel):
@@ -246,17 +246,16 @@ class HyperModel(BaseModel):
     self.CreateDecodingGraph(cell, linear_proj, params)
 
 
-def PrintParams(param_list, handle=sys.stdout.write):
+def PrintParams(handle=sys.stdout.write):
   """Print the names of the parameters and their sizes. 
 
   Args:
-    param_list: list of tensors
     handle: where to write the param sizes to
   """
   handle('NETWORK SIZE REPORT\n')
   param_count = 0
   fmt_str = '{0: <25}\t{1: >12}\t{2: >12,}\n'
-  for p in param_list:
+  for p in tf.trainable_variables():
     shape = p.get_shape()
     shape_str = 'x'.join([str(x.value) for x in shape])
     handle(fmt_str.format(p.name, shape_str, np.prod(shape).value))
