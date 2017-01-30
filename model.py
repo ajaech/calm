@@ -144,12 +144,7 @@ class BaseModel(object):
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
     # make a mask
-    lengths_transposed = tf.expand_dims(tf.to_int32(self.seq_len), 1)
-    lengths_tiled = tf.tile(lengths_transposed, [1, self.max_length])
-    r = tf.range(0, self.max_length, 1)
-    range_row = tf.expand_dims(r, 0)
-    range_tiled = tf.tile(range_row, [params.batch_size, 1])
-    indicator = tf.less(range_tiled, lengths_tiled)
+    indicator = tf.sequence_mask(tf.to_int32(self.seq_len), self.max_length)
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
