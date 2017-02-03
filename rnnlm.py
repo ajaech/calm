@@ -10,10 +10,11 @@ import numpy as np
 import os
 import tensorflow as tf
 
+from model import HyperModel, PrintParams
 from vocab import Vocab
 from batcher import Dataset, ReadData
-from model import HyperModel
 
+import code
 
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
@@ -22,6 +23,7 @@ parser.add_argument('--mode', default='train',
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
 parser.add_argument('--threads', type=int, default=12)
+parser.add_argument('--bizzaro', type=bool, default=False)
 args = parser.parse_args()
 
 if not os.path.exists(args.expdir):
@@ -47,7 +49,7 @@ if args.mode != 'train':
 
 if args.mode in ('train', 'eval'):
   filename = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
-  usernames, texts = ReadData(filename, mode=args.mode)
+  usernames, texts = ReadData(filename, mode=args.mode, scramble_usernames=args.bizzaro)
   dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
   dataset.AddDataSource(usernames, texts)
 
@@ -130,24 +132,21 @@ def DumpEmbeddings(expdir):
 def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  m = model
-  sess = session
-  v = vocab
-  uv = username_vocab
+  PrintParams()
 
-  uword = m._word_embeddings[:, :params.user_embedding_size]
-  uu = m._user_embeddings
+  uword = model._word_embeddings[:, :params.user_embedding_size]
+  uu = model._user_embeddings
 
   subreddit = tf.placeholder(tf.int32, ())
 
   scores = tf.matmul(uword, tf.expand_dims(uu[subreddit, :], 1))
 
   def Process(subname):
-    s = session.run(scores, {subreddit: uv[subname]})
+    s = session.run(scores, {subreddit: username_vocab[subname]})
     vals = np.squeeze(s.T).argsort()
 
     print '~~~{0}~~~'.format(subname)
-    topwords = ['{0} {1:.2f}'.format(v[vals[-1-i]], s[vals[-1-i]][0])
+    topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]][0])
                 for i in range(10)]
     print ' '.join(topwords)
 
@@ -167,24 +166,29 @@ def Greedy(expdir):
 
     words = []
     for i in xrange(10):
-      a = session.run([model.next_idx, model.next_c, model.next_h],
+      a = session.run([model.next_idx, model.next_prob, model.next_c, model.next_h],
                       {
                         model.username: np.array([username_vocab[subname]]),
                         model.prev_word: vocab[current_word],
                         model.prev_c: prevstate_c,
                         model.prev_h: prevstate_h
                       })
-      current_word_id, prevstate_h, prevstate_c = a
-      current_word = vocab.idx_to_word[current_word_id[0]]
+      current_word_id, current_prob, prevstate_h, prevstate_c = a
+      current_word_id = current_word_id[0]
+      q = np.random.rand()
+      cumulative = np.cumsum(current_prob)
+      current_word_id = np.argmin((cumulative < q))
+      current_word = vocab.idx_to_word[current_word_id]
       words.append(current_word)
       if current_word == '</S>':
         break
-    print '~~~{0}~~~'.format(subname)
-    print ' '.join(words)
+    print '\t' + ' '.join(words)
 
   for n in ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews', 'AskReddit',
-            'GoneWild', 'tifu', 'WTF']:
-    Process(n)
+            'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'nfl']:
+    print '~~~{0}~~~'.format(n)
+    for _ in range(3):
+      Process(n)
 
 
 def GetText(s, seq_len):
@@ -199,7 +203,7 @@ def Eval(expdir):
 
   total_word_count = 0
   total_log_prob = 0
-  for pos in xrange(min(dataset.GetNumBatches(), 300)):
+  for pos in xrange(min(dataset.GetNumBatches(), 700)):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
