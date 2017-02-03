@@ -6,7 +6,7 @@ import random
 
 
 def ReadData(filename, limit=10000000, mode='train', worker=None,
-             num_workers=None, scramble_usernames=False):
+             num_workers=None):
   usernames = []
   texts = []
 
@@ -30,9 +30,6 @@ def ReadData(filename, limit=10000000, mode='train', worker=None,
 
       usernames.append(username)
       texts.append(['<S>'] + text.lower().split() + ['</S>'])
-
-    if scramble_usernames:
-      random.shuffle(usernames)
 
   return usernames, texts
 

@@ -4,6 +4,7 @@ import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 
+import code
 
 def _linear(args, output_size, bias, bias_start=0.0, scope=None):
   """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
@@ -160,6 +161,7 @@ class BaseModel(object):
     else:
       masked_loss = self.ComputeLoss(proj_out, self._word_embeddings)
       self.masked_loss = masked_loss
+
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
 
@@ -198,6 +200,11 @@ class BaseModel(object):
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
+
+    per_sentence_loss = tf.reduce_sum(tf.reshape(masked_loss,
+                                                 outputs.get_shape()[:2]), 1)
+    self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
+
     return masked_loss
 
   def CreateDecodingGraph(self, cell, linear_proj, params):
