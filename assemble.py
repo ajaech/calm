@@ -1,8 +1,8 @@
 import glob
 import json
+import numpy as np
 import os
 import pandas
-
 
 results = []
 
@@ -27,6 +27,22 @@ for dirname in glob.glob('exps/exp1*'):
           params['dir'] = dirname
 
           results.append(params)
+
+  filename = os.path.join(dirname, 'pplstats.csv.gz')
+  if os.path.exists(filename):
+    print filename
+    data = pandas.read_csv(filename)
+    
+    def PPL(df):
+      return (df.cost * df.length).sum() / df.length.sum()
+
+    summary = data.groupby('uname').length.agg(len).reset_index()
+    ppl = data.groupby('uname').apply(PPL)
+
+    summary['ppl'] = ppl.apply(np.exp).values
+    summary = summary[summary.length > 300].sort_values('ppl')
+
+    summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
 
 df = pandas.DataFrame(results)
 df = df.sort_values('ppl')

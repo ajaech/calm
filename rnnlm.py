@@ -8,6 +8,7 @@ import logging
 import random
 import numpy as np
 import os
+import pandas
 import tensorflow as tf
 
 from model import HyperModel, PrintParams
@@ -23,7 +24,6 @@ parser.add_argument('--mode', default='train',
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
 parser.add_argument('--threads', type=int, default=12)
-parser.add_argument('--bizzaro', type=bool, default=False)
 args = parser.parse_args()
 
 if not os.path.exists(args.expdir):
@@ -49,8 +49,10 @@ if args.mode != 'train':
 
 if args.mode in ('train', 'eval'):
   filename = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
-  usernames, texts = ReadData(filename, mode=args.mode, scramble_usernames=args.bizzaro)
-  dataset = Dataset(max_len=params.max_len + 1, preshuffle=True, batch_size=params.batch_size)
+  usernames, texts = ReadData(filename, mode=args.mode)
+  dataset = Dataset(max_len=params.max_len + 1, 
+                    preshuffle=args.mode=='train',
+                    batch_size=params.batch_size)
   dataset.AddDataSource(usernames, texts)
 
 if args.mode == 'train':
@@ -203,7 +205,8 @@ def Eval(expdir):
 
   total_word_count = 0
   total_log_prob = 0
-  for pos in xrange(min(dataset.GetNumBatches(), 700)):
+  results = []
+  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -213,14 +216,25 @@ def Eval(expdir):
         model.username: usernames
     }
 
-    cost = session.run(model.cost, feed_dict=feed_dict)
+    cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
+                                       feed_dict)
+
+    lens = feed_dict[model.seq_len]
+    unames = feed_dict[model.username]
+
+    for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
+      results.append({'length': length, 'uname': username_vocab[uname],
+                      'cost': sentence_cost})
 
     total_word_count += sum(seq_len)
     total_log_prob += float(cost * sum(seq_len))
     ppl = np.exp(total_log_prob / total_word_count)
     print '{0}\t{1:.3f}'.format(pos, ppl)
+  
+  results = pandas.DataFrame(results)
+  results.to_csv(os.path.join(expdir, 'pplstats.csv.gz'), compression='gzip')
 
-
+    
 if args.mode == 'train':
   Train(args.expdir)
 
