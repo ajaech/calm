@@ -145,16 +145,17 @@ class BaseModel(object):
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
     # make a mask
-    indicator = tf.sequence_mask(tf.to_int32(self.seq_len), self.max_length)
+    indicator = tf.sequence_mask(tf.to_int32(self.seq_len - 1), self.max_length)
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
   def OutputHelper(self, outputs, linear_proj, params, use_nce_loss=True):
     reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
     projected = tf.matmul(reshaped_outputs, linear_proj)
+
     proj_out =  tf.reshape(projected, [outputs.get_shape()[0].value,
                                        outputs.get_shape()[1].value, -1])
-                                    
+
     if use_nce_loss:
       losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
@@ -201,8 +202,8 @@ class BaseModel(object):
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
 
-    per_sentence_loss = tf.reduce_sum(tf.reshape(masked_loss,
-                                                 outputs.get_shape()[:2]), 1)
+    self.per_word_loss = tf.reshape(masked_loss, outputs.get_shape()[:2])
+    per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
     self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
 
     return masked_loss
@@ -242,7 +243,8 @@ class HyperModel(BaseModel):
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
 
-    linear_proj = tf.get_variable('linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
+    linear_proj = tf.get_variable(
+      'linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
     self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
 
     self.CreateDecodingGraph(cell, linear_proj, params)
