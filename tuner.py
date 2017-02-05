@@ -3,30 +3,34 @@ import numpy as np
 import os
 import random
 
-threads = 14
+threads = 10
 
 def GetRandomSetting():
   """Gets a random parameter setting."""
   model_params = {}
 
-  model_params['dropout_keep_prob'] = random.choice(np.arange(0.5, 1.0, 0.1))
-  model_params['nce_samples'] = random.choice(range(100, 300, 50))
-  model_params['batch_size'] = random.choice([100, 200, 300])
+  #model_params['dropout_keep_prob'] = random.choice(
+  #  np.arange(0.75, 1.01, 0.05))
+  model_params['dropout_keep_prob'] = 1.0
+  model_params['nce_samples'] = random.choice(range(150, 400, 30))
+  model_params['batch_size'] = random.choice([150, 220, 280])
 
-  model_params['embedding_dims'] = random.choice([128, 180, 196, 256])
-  model_params['cell_size'] = random.choice([200, 250, 300])
-  model_params['user_embedding_size'] = random.choice([10, 15, 30, 40])
+  model_params['embedding_dims'] = random.choice([128, 150, 175, 220])
+  model_params['cell_size'] = random.choice([200, 220, 260, 280])
+  model_params['user_embedding_size'] = random.choice([12, 18, 25, 36])
 
   model_params['max_len'] = 35
 
-  model_params['model'] = random.choice(['hyper', 'mikolov', 'standard'])
+  model_params['use_softmax_adaptation'] = random.choice([True, True, False, False, False])
+  model_params['use_mikolov_adaptation'] = random.choice([True, True, False, False, False])
+  model_params['use_hyper_adaptation'] = random.choice([True, True, False, False, False])
 
-  model_params['learning_rate'] = random.choice([0.001, 0.005])
+  model_params['learning_rate'] = 0.001
 
   return model_params
 
 
-for i in xrange(30, 50):
+for i in xrange(10, 30):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:

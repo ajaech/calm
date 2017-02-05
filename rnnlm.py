@@ -88,7 +88,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(90000):
+  for idx in xrange(150000):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -137,25 +137,25 @@ def Debug(expdir):
   PrintParams()
 
   uword = model._word_embeddings[:, :params.user_embedding_size]
-  uu = model._user_embeddings
-
   subreddit = tf.placeholder(tf.int32, ())
+  scores = tf.matmul(uword, tf.expand_dims(model._user_embeddings[subreddit, :], 1))
 
-  scores = tf.matmul(uword, tf.expand_dims(uu[subreddit, :], 1))
-
-  def Process(subname):
-    s = session.run(scores, {subreddit: username_vocab[subname]})
-    vals = np.squeeze(s.T).argsort()
+  def Process(s, subname):
+    s = np.squeeze(s.T)
+    vals = s.argsort()
 
     print '~~~{0}~~~'.format(subname)
-    topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]][0])
+    topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]])
                 for i in range(10)]
     print ' '.join(topwords)
 
+  base_bias = session.run(model.base_bias)
+  Process(base_bias.T, 'Baseline')
   for subname in ['exmormon', 'AskMen', 'AskWomen', 'Music', 'aww',
                   'dogs', 'cats', 'worldnews', 'tifu', 'books', 'WTF',
                   'RealGirls', 'relationships', 'Android']:
-    Process(subname)
+    s = session.run(scores, {subreddit: username_vocab[subname]})
+    Process(s, subname)
 
 
 def Greedy(expdir):
@@ -243,6 +243,7 @@ if args.mode == 'eval':
 
 if args.mode == 'debug':
   Greedy(args.expdir)
+  Debug(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

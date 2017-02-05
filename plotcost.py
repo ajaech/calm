@@ -35,6 +35,9 @@ def PlotIt(filename, var, diff=False, invert=False, smooth=1.0):
       data.append(json.loads(line))
   data = pandas.DataFrame(data[1:])
 
+  if var not in data.columns:
+    print 'ERROR: could not plot {0}'.format(filename)
+    return
   values = data[var]
   if diff:
     # normalize by diff of iters
@@ -52,7 +55,7 @@ def PlotIt(filename, var, diff=False, invert=False, smooth=1.0):
   # remove nans
   nan_idx = ~np.isnan(values)
   values = values[nan_idx]
-  iters = data.iter.values[nan_idx]
+  iters = data.iter.values[:len(values)][nan_idx]
   pyplot.plot(iters, values)
 
   pyplot.xlabel('Iteration')
