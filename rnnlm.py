@@ -5,7 +5,6 @@ import collections
 import gzip
 import json
 import logging
-import random
 import numpy as np
 import os
 import pandas
@@ -68,7 +67,8 @@ else:
   username_vocab = Vocab.Load(os.path.join(args.expdir, 'username_vocab.pickle'))
 
 
-model = HyperModel(params, len(vocab), len(username_vocab), 
+unigram_probs = vocab.GetUnigramProbs()
+model = HyperModel(params, unigram_probs, len(username_vocab), 
                    use_nce_loss=args.mode == 'train')
 
 saver = tf.train.Saver(tf.all_variables())
@@ -88,7 +88,7 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  for idx in xrange(150000):
+  for idx in xrange(params.iters):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -100,9 +100,9 @@ def Train(expdir):
     }
 
     a = session.run([model.cost, train_op], feed_dict)
-  
+
     if idx % 25 == 0:
-      ws = [vocab.idx_to_word[s[0, i]] for i in range(seq_len[0])]
+      ws = [vocab[s[0, i]] for i in range(seq_len[0])]
       print ' '.join(ws)
       print float(a[0])
       print '-------'
@@ -117,8 +117,6 @@ def DumpEmbeddings(expdir):
 
   word = model._word_embeddings.eval(session=session)
   user = model._user_embeddings.eval(session=session)
-  v = vocab
-  uv = username_vocab
 
   with gzip.open(os.path.join(expdir, 'embeddings.tsv.gz'), 'w') as f:
     for w in word:
@@ -133,12 +131,7 @@ def DumpEmbeddings(expdir):
 
 def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
-
   PrintParams()
-
-  uword = model._word_embeddings[:, :params.user_embedding_size]
-  subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model._user_embeddings[subreddit, :], 1))
 
   def Process(s, subname):
     s = np.squeeze(s.T)
@@ -148,9 +141,14 @@ def Debug(expdir):
     topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]])
                 for i in range(10)]
     print ' '.join(topwords)
-
+    
   base_bias = session.run(model.base_bias)
   Process(base_bias.T, 'Baseline')
+
+  uword = model._word_embeddings[:, :params.user_embedding_size]
+  subreddit = tf.placeholder(tf.int32, ())
+  scores = tf.matmul(uword, tf.expand_dims(model._user_embeddings[subreddit, :], 1))
+
   for subname in ['exmormon', 'AskMen', 'AskWomen', 'Music', 'aww',
                   'dogs', 'cats', 'worldnews', 'tifu', 'books', 'WTF',
                   'RealGirls', 'relationships', 'Android']:
@@ -168,21 +166,20 @@ def Greedy(expdir):
 
     words = []
     for i in xrange(10):
-      a = session.run([model.next_idx, model.next_prob, model.next_c, model.next_h],
+      a = session.run([model.next_prob, model.next_c, model.next_h],
                       {
                         model.username: np.array([username_vocab[subname]]),
                         model.prev_word: vocab[current_word],
                         model.prev_c: prevstate_c,
                         model.prev_h: prevstate_h
                       })
-      current_word_id, current_prob, prevstate_h, prevstate_c = a
-      current_word_id = current_word_id[0]
-      q = np.random.rand()
+      current_prob, prevstate_h, prevstate_c = a
       cumulative = np.cumsum(current_prob)
-      current_word_id = np.argmin((cumulative < q))
-      current_word = vocab.idx_to_word[current_word_id]
-      words.append(current_word)
-      if current_word == '</S>':
+      current_word_id = np.argmin(cumulative < np.random.rand())
+      p = current_prob[0, current_word_id]
+      current_word = vocab[current_word_id]
+      words.append('{0}_{1:.3f}'.format(current_word, p))
+      if '</S>' in current_word:
         break
     print '\t' + ' '.join(words)
 
@@ -194,7 +191,7 @@ def Greedy(expdir):
 
 
 def GetText(s, seq_len):
-  ws = [vocab.idx_to_word[s[0, i]] for i in range(seq_len)]
+  ws = [vocab[s[0, i]] for i in range(seq_len)]
   return ' '.join(ws)
 
 def Eval(expdir):
@@ -206,7 +203,7 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
+  for pos in xrange(min(dataset.GetNumBatches(), 400)):
     s, seq_len, usernames = dataset.GetNextBatch()
 
     feed_dict = {
@@ -218,6 +215,9 @@ def Eval(expdir):
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
+
+    z = session.run(model.per_word_loss, feed_dict)
+    word_ids = feed_dict[model.y]
 
     lens = feed_dict[model.seq_len]
     unames = feed_dict[model.username]
@@ -242,8 +242,8 @@ if args.mode == 'eval':
   Eval(args.expdir)
 
 if args.mode == 'debug':
-  Greedy(args.expdir)
   Debug(args.expdir)
+  Greedy(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

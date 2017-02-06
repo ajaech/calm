@@ -64,6 +64,20 @@ class HyperCell(rnn_cell.RNNCell):
     self.mikolov_adapt = mikolov_adapt
     self.hyper_adapt = hyper_adapt
 
+    with vs.variable_scope('hyper_lstm_cell'):
+      if self.hyper_adapt:
+        self.adaptation_weights = tf.get_variable(
+          'adaptation_weights', 
+          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+        self.adaptation_bias = tf.get_variable(
+          'adaptation_bias', [4 * self._num_units],
+          initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
+
+      if self.mikolov_adapt:
+        self.biases = tf.get_variable(
+          'mikolov_biases', 
+          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+
   @property
   def state_size(self):
     return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
@@ -75,26 +89,19 @@ class HyperCell(rnn_cell.RNNCell):
   def __call__(self, inputs, state, scope=None, reuse=None):
     """Long short-term memory cell (LSTM)."""
 
-    with vs.variable_scope(scope or "basic_lstm_cell", reuse=reuse):
+    with vs.variable_scope("hyper_lstm_cell", reuse=reuse):
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
       adapted = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
 
       if self.hyper_adapt:
-        adaptation_weights = tf.get_variable(
-          'adaptation_weights', 
-          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-        adaptation_bias = tf.get_variable('adaptation_bias', [4 * self._num_units],
-                                          initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
-        adaptation_coeff = tf.nn.relu(tf.matmul(self.user_embeds, adaptation_weights) 
-                                      + adaptation_bias)
+        adaptation_coeff = tf.nn.relu(
+          tf.matmul(self.user_embeds, self.adaptation_weights) 
+          + self.adaptation_bias)
         adapted = tf.mul(adaptation_coeff, adapted)
         
       if self.mikolov_adapt:
-        biases = tf.get_variable(
-          'mikolov_biases', 
-          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
-        delta = tf.matmul(self.user_embeds, biases)
+        delta = tf.matmul(self.user_embeds, self.biases)
         adapted += delta
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
@@ -112,9 +119,10 @@ class HyperCell(rnn_cell.RNNCell):
 class BaseModel(object):
   """Hold the code that is shared between all model varients."""
 
-  def __init__(self, params, vocab_size, user_size=None):
+  def __init__(self, params, unigram_probs, user_size=None):
+    self.unigram_probs = unigram_probs
     self.max_length = params.max_len
-    self.vocab_size = vocab_size
+    self.vocab_size = len(unigram_probs)
     self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
     self.y = tf.placeholder(tf.int64, [params.batch_size, self.max_length], name='y')
     self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
@@ -130,17 +138,18 @@ class BaseModel(object):
       
     if params.use_softmax_adaptation:
       self._word_embeddings = tf.get_variable(
-        'word_embeddings', [vocab_size, self._embedding_dims + params.user_embedding_size])
+        'word_embeddings', [self.vocab_size, self._embedding_dims +
+                            params.user_embedding_size])
     else:
-      self._word_embeddings = tf.get_variable('word_embeddings',
-                                              [vocab_size, self._embedding_dims])
+      self._word_embeddings = tf.get_variable(
+        'word_embeddings', [self.vocab_size, self._embedding_dims])
 
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
 
     if params.use_softmax_adaptation:  # chop off the user embedding part
       self._inputs = self._inputs[:, :, params.user_embedding_size:]
 
-    self.base_bias = tf.get_variable('base_bias', [vocab_size])
+    self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
 
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
@@ -170,19 +179,23 @@ class BaseModel(object):
     w_list = tf.unpack(weights, axis=1)
     losses = []
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
-      sampled_values = tf.nn.learned_unigram_candidate_sampler(
+      sampled_values = tf.nn.fixed_unigram_candidate_sampler(
         true_classes=y,
         num_true=1,
         num_sampled=num_sampled,
         unique=True,
-        range_max=self.vocab_size)
+        range_max=self.vocab_size,
+        unigrams=self.unigram_probs
+      )
+
+      self.a, self.b, self.c = sampled_values
 
       if user_embeddings is not None:
         w = tf.concat(1, [user_embeddings, w])
 
-      nce_loss = tf.nn.nce_loss(out_embeddings, self.base_bias, 
-                                w, y, num_sampled, self.vocab_size, 
-                                sampled_values=sampled_values)        
+      nce_loss = tf.nn.sampled_softmax_loss(out_embeddings, self.base_bias, 
+                                            w, y, num_sampled, self.vocab_size, 
+                                            sampled_values=sampled_values)        
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
@@ -229,14 +242,16 @@ class BaseModel(object):
 
 class HyperModel(BaseModel):
 
-  def __init__(self, params, vocab_size, user_size, use_nce_loss=True):
-    super(HyperModel, self).__init__(params, vocab_size, user_size=user_size)
+  def __init__(self, params, unigram_probs, user_size, use_nce_loss=True):
+    super(HyperModel, self).__init__(params, unigram_probs, user_size=user_size)
 
     uembeds = None
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
       uembeds = self._uembeds
+
     cell = HyperCell(params.cell_size, uembeds, mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
+
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)

@@ -1,13 +1,14 @@
 {
-    "nce_samples": 300,
-    "batch_size": 200,
+    "iters": 100000,
+    "nce_samples": 200,
+    "batch_size": 100,
     "learning_rate": 0.001,
-    "embedding_dims": 128,
-    "cell_size": 300,
+    "embedding_dims": 40,
+    "cell_size": 64,
     "user_embedding_size": 40,
     "max_len": 35,
-    "dropout_keep_prob": 0.5,
-    "use_softmax_adaptation": true,
+    "dropout_keep_prob": 0.9,
+    "use_softmax_adaptation": false,
     "use_mikolov_adaptation": false,
     "use_hyper_adaptation": false
 }

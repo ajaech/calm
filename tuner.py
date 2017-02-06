@@ -26,11 +26,12 @@ def GetRandomSetting():
   model_params['use_hyper_adaptation'] = random.choice([True, True, False, False, False])
 
   model_params['learning_rate'] = 0.001
+  model_params['iters'] = random.choice([80000, 100000, 120000])
 
   return model_params
 
 
-for i in xrange(10, 30):
+for i in xrange(10, 40):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:

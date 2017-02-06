@@ -4,42 +4,10 @@ import numpy as np
 import pickle
 import re
 
+
 class Vocab(object):
 
-  def _normalize(self, word):
-    if re.match(ur'^<.*>$', word):
-      return word
-
-    if self.specialcase:
-      newword = []
-      prev_is_lower = True
-      for letter in word:
-        if letter.isupper():
-          if prev_is_lower:
-            newword.append('~')
-          prev_is_lower = False
-        else:
-          prev_is_lower = True
-        newword.append(letter.lower())
-      word = ''.join(newword)
-
-    if self.lowercase:
-      word = word.lower()
-
-    if self.numreplace:
-      word = re.sub(ur'\d', '#', word)
-
-    return word
-
-  def __init__(self, tokenset, unk_symbol='<UNK>',
-               lowercase=False, numreplace=False):
-    self.lowercase = lowercase
-    self.numreplace = numreplace
-
-    self.specialcase = False
-
-    tokenset = set([self._normalize(w) for w in tokenset])
-
+  def __init__(self, tokenset, unk_symbol='<UNK>', token_counts=None):
     self.vocab_size = len(tokenset)
     self.unk_symbol = unk_symbol
 
@@ -48,6 +16,11 @@ class Vocab(object):
     self.idx_to_word = dict(zip(self.word_to_idx.values(),
                             self.word_to_idx.keys()))
 
+    self.token_counts = [token_counts[self.idx_to_word[i]] for i in
+                         range(self.vocab_size)]
+
+  def GetUnigramProbs(self):
+    return self.token_counts
 
   @staticmethod
   def Load(filename):
@@ -57,47 +30,27 @@ class Vocab(object):
 
   @classmethod
   def MakeFromData(cls, lines, min_count, unk_symbol='<UNK>',
-                   max_length=None, no_special_syms=False, normalize=False):
-    lowercase=False
-    numreplace=False
-
-    if normalize:
-      lowercase=True
-      numreplace=True
-
+                   max_length=None, no_special_syms=False):
     token_counts = collections.Counter()
 
     for line in lines:
       token_counts.update(line)
 
     tokenset = set()
-    for word in token_counts:
+    for word in token_counts.keys():
       if max_length and len(word) > max_length:
         continue
       if token_counts[word] >= min_count:
         tokenset.add(word)
+      else:
+        token_counts[unk_symbol] += token_counts[word]
 
     if not no_special_syms:
       tokenset.add(unk_symbol)
-      tokenset.add('<S>')
       tokenset.add('</S>')
-    return cls(tokenset, unk_symbol=unk_symbol, lowercase=lowercase, 
-               numreplace=numreplace)
 
-  @classmethod
-  def ByteVocab(cls):
-    """Creates a vocab that has a token for each possible byte.
+    return cls(tokenset, unk_symbol=unk_symbol, token_counts=token_counts)
 
-    It's useful to have a fixed byte vocab so that the subset of bytes
-    that form the vocab is not dependent on the dataset being used. Thus,
-    the learned byte embeddings can be reused on different datasets.
-    """
-    c = '0123456789abcdef'
-    tokens = ['<S>', '</S>']
-    for i in c:
-      for j in c:
-        tokens.append(i + j)
-    return cls(tokens)
 
   @classmethod
   def LoadFromTextFile(cls, filename, unk_symbol='<UNK>'):
@@ -113,13 +66,11 @@ class Vocab(object):
     return [self.idx_to_word[i] for i in xrange(len(self.word_to_idx))]
   
   def LookupIdx(self, token):
-    token = self._normalize(token)
     if token in self.word_to_idx:
       return self.word_to_idx[token]
     return self.word_to_idx.get(self.unk_symbol, None)
 
   def __contains__(self, key):
-    key = self._normalize(key)
     return key in self.word_to_idx
 
   def __getitem__(self, key):
