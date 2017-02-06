@@ -5,5 +5,5 @@ for path in exps/*; do
     dirname="$(basename "${path}")"
 
     echo $dirname
-    ./rnnlm.py --mode=eval exps/$dirname > exps/$dirname/ppl.txt
+    ./rnnlm.py --mode=eval exps/$dirname --threads 6 > exps/$dirname/ppl.txt
 done

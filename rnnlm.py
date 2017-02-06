@@ -165,6 +165,7 @@ def Greedy(expdir):
     prevstate_c = np.zeros((1, params.cell_size))
 
     words = []
+    log_probs = []
     for i in xrange(10):
       a = session.run([model.next_prob, model.next_c, model.next_h],
                       {
@@ -176,18 +177,22 @@ def Greedy(expdir):
       current_prob, prevstate_h, prevstate_c = a
       cumulative = np.cumsum(current_prob)
       current_word_id = np.argmin(cumulative < np.random.rand())
-      p = current_prob[0, current_word_id]
+      log_probs.append(-np.log(current_prob[0, current_word_id]))
       current_word = vocab[current_word_id]
-      words.append('{0}_{1:.3f}'.format(current_word, p))
+      words.append(current_word)
       if '</S>' in current_word:
         break
-    print '\t' + ' '.join(words)
+    
+    ppl = np.exp(np.mean(log_probs))
+    return ppl, ' '.join(words)
+    
 
   for n in ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews', 'AskReddit',
             'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'nfl']:
     print '~~~{0}~~~'.format(n)
-    for _ in range(3):
-      Process(n)
+    for _ in range(5):
+      ppl, sentence = Process(n)
+      print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
 def GetText(s, seq_len):

@@ -40,7 +40,7 @@ for dirname in glob.glob('exps/exp1*'):
     ppl = data.groupby('uname').apply(PPL)
 
     summary['ppl'] = ppl.apply(np.exp).values
-    summary = summary[summary.length > 300].sort_values('ppl')
+    summary = summary[summary.length > 60].sort_values('ppl')
 
     summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
 
