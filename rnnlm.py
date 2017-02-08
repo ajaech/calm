@@ -22,6 +22,9 @@ parser.add_argument('--mode', default='train',
                     choices=['train', 'debug', 'eval', 'dump'])
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
+parser.add_argument('--data', type=str, 
+                    default='/n/falcon/s0/ajaech/reddit.tsv.bz2')
+parser.add_argument('--partition_override', type=bool, default=False)
 parser.add_argument('--threads', type=int, default=12)
 args = parser.parse_args()
 
@@ -46,16 +49,28 @@ batch_size = params.batch_size
 if args.mode != 'train':
   params.batch_size = 20
 
+SEPERATOR = ' '
+if hasattr(params, 'splitter') and params.splitter == 'char':
+  SEPERATOR = ''
+
 if args.mode in ('train', 'eval'):
-  filename = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
-  usernames, texts = ReadData(filename, mode=args.mode)
+  mode = args.mode
+  if args.partition_override:
+    mode = 'all'
+  splitter = 'word'
+  if hasattr(params, 'splitter'):
+    splitter = params.splitter
+  usernames, texts = ReadData(args.data, mode=mode, splitter=params.splitter)
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
   dataset.AddDataSource(usernames, texts)
 
 if args.mode == 'train':
-  vocab = Vocab.MakeFromData(texts, min_count=20)
+  if hasattr(params, 'vocab'):
+    vocab = Vocab.Load(params.vocab)
+  else:
+    vocab = Vocab.MakeFromData(texts, min_count=20)
   username_vocab = Vocab.MakeFromData([[u] for u in usernames],
                                       min_count=50)
   vocab.Save(os.path.join(args.expdir, 'word_vocab.pickle'))
@@ -68,8 +83,11 @@ else:
 
 
 unigram_probs = vocab.GetUnigramProbs()
+use_nce_loss = args.mode == 'train'
+if len(unigram_probs) < 5000:
+  use_nce_loss = False
 model = HyperModel(params, unigram_probs, len(username_vocab), 
-                   use_nce_loss=args.mode == 'train')
+                   use_nce_loss=use_nce_loss)
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
@@ -103,7 +121,7 @@ def Train(expdir):
 
     if idx % 25 == 0:
       ws = [vocab[s[0, i]] for i in range(seq_len[0])]
-      print ' '.join(ws)
+      print SEPERATOR.join(ws)
       print float(a[0])
       print '-------'
       logging.info({'iter': idx, 'cost': float(a[0])})
@@ -166,13 +184,13 @@ def Greedy(expdir):
 
     words = []
     log_probs = []
-    for i in xrange(10):
+    for i in xrange(50):
       a = session.run([model.next_prob, model.next_c, model.next_h],
                       {
                         model.username: np.array([username_vocab[subname]]),
                         model.prev_word: vocab[current_word],
                         model.prev_c: prevstate_c,
-                        model.prev_h: prevstate_h
+                        model.prev_h: prevstate_h,
                       })
       current_prob, prevstate_h, prevstate_c = a
       cumulative = np.cumsum(current_prob)
@@ -184,11 +202,13 @@ def Greedy(expdir):
         break
     
     ppl = np.exp(np.mean(log_probs))
-    return ppl, ' '.join(words)
+    return ppl, SEPERATOR.join(words)
     
+  sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
+                 'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'hockey']
+  sample_list = ['en', 'fr', 'pt', 'es', 'und']
 
-  for n in ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews', 'AskReddit',
-            'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'nfl']:
+  for n in sample_list:
     print '~~~{0}~~~'.format(n)
     for _ in range(5):
       ppl, sentence = Process(n)

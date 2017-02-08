@@ -1,18 +1,39 @@
 import argparse
 import bz2
+import gzip
 import itertools
 import numpy as np
 import random
 
 
+def GetFileHandle(filename):
+  if filename.endswith('.bz2'):
+    return bz2.BZ2File(filename, 'r')
+  if filename.endswith('.gz'):
+    return gzip.open(filename, 'r')
+  return open(filename, 'r')
+
+
+def WordSplitter(text):
+  return text.lower.split()
+
+
+def CharSplitter(text):
+  return list(text)
+
+
 def ReadData(filename, limit=10000000, mode='train', worker=None,
-             num_workers=None):
+             num_workers=None, splitter='word'):
   usernames = []
   texts = []
 
-  with bz2.BZ2File(filename, 'r') as f:
+  SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
+
+  with GetFileHandle(filename) as f:
     for idnum, line in enumerate(f):
-      username, text = line.split('\t')
+      fields = line.split('\t')
+      username = fields[0]
+      text = fields[-1]
 
       if idnum % 100000 == 0:
         print idnum
@@ -23,13 +44,14 @@ def ReadData(filename, limit=10000000, mode='train', worker=None,
       if worker is not None and int(idnum) % num_workers != worker:
         continue
 
-      if mode == 'train' and int(idnum) % 10 < 1:
-        continue
-      if mode != 'train' and int(idnum) % 10 >= 1:
-        continue
+      if mode != 'all':
+        if mode == 'train' and int(idnum) % 10 < 1:
+          continue
+        if mode != 'train' and int(idnum) % 10 >= 1:
+          continue
 
       usernames.append(username)
-      texts.append(['<S>'] + text.lower().split() + ['</S>'])
+      texts.append(['<S>'] + SplitFunc(text) + ['</S>'])
 
   return usernames, texts
 

@@ -237,7 +237,8 @@ class BaseModel(object):
     projected = tf.matmul(result, linear_proj)
     logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
     self.next_idx = tf.argmax(logits, 1)
-    self.next_prob = tf.nn.softmax(logits / 0.5)
+    self.temperature = tf.placeholder_with_default([0.5], [1])
+    self.next_prob = tf.nn.softmax(logits / self.temperature)
 
 
 class HyperModel(BaseModel):

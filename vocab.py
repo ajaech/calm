@@ -103,7 +103,14 @@ if __name__ == '__main__':
   parser.add_argument('filename')
   args = parser.parse_args()
 
-  v = Vocab.Load(args.filename)
+  if args.filename.endswith('.pickle'):
+    v = Vocab.Load(args.filename)
 
-  for i in v.GetWords():
-    print i
+    for i in v.GetWords():
+      print i
+
+  else:
+    with open(args.filename, 'r') as f:
+      lines = f.readlines()
+    v = Vocab.MakeFromData([x.split() for x in lines], 2)
+    v.Save('turkvocab.pickle')
