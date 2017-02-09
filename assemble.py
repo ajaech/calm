@@ -3,10 +3,21 @@ import json
 import numpy as np
 import os
 import pandas
+import code
 
 results = []
 
-for dirname in glob.glob('exps/exp1*'):
+for dirname in glob.glob('exps/lang*'):
+
+  if os.path.isfile(dirname):
+    continue
+
+  # load the params file
+  with open(os.path.join(dirname, 'params.json'), 'r') as g:
+    params = json.load(g)
+  params['dir'] = dirname
+
+  # Check for perplexity logfile
   filename = os.path.join(dirname, 'ppl.txt')
   if os.path.exists(filename):
     with open(filename, 'r') as f:
@@ -16,17 +27,25 @@ for dirname in glob.glob('exps/exp1*'):
 
         print ppl, dirname
 
-        with open(os.path.join(dirname, 'params.json'), 'r') as g:
-          params = json.load(g)
+        try:
+          params['ppl'] = float(ppl)
+        except ValueError:
+          print 'error: could not convert ppl <{0}>'.format(ppl)
+          continue
 
-          try:
-            params['ppl'] = float(ppl)
-          except ValueError:
-            print 'error: could not convert ppl <{0}>'.format(ppl)
-            continue
-          params['dir'] = dirname
+  # Check for F1 score logfile
+  filename = os.path.join(dirname, 'f1.txt')
+  if os.path.exists(filename):
+    with open(filename, 'r') as f:
+      lines = f.readlines()
+      if len(lines):
+        f1 = lines[-1].split()[-1]
+        accuracy = lines[2].split()[-1]
+        params['f1'] = f1
+        params['acc'] = accuracy
 
-          results.append(params)
+  results.append(params)
+      
 
   filename = os.path.join(dirname, 'pplstats.csv.gz')
   if os.path.exists(filename):
@@ -45,5 +64,8 @@ for dirname in glob.glob('exps/exp1*'):
     summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
 
 df = pandas.DataFrame(results)
-df = df.sort_values('ppl')
+if 'ppl' in df.columns:
+  df = df.sort_values('ppl')
+else:
+  df = df.sort_values('f1')
 df.to_csv('results.csv', index=False, sep='\t')
