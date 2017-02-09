@@ -15,11 +15,11 @@ def GetFileHandle(filename):
 
 
 def WordSplitter(text):
-  return text.lower.split()
+  return text.lower().split()
 
 
 def CharSplitter(text):
-  return list(text)
+  return list(text.strip())
 
 
 def ReadData(filename, limit=10000000, mode='train', worker=None,

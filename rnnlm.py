@@ -19,7 +19,7 @@ import code
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
 parser.add_argument('--mode', default='train',
-                    choices=['train', 'debug', 'eval', 'dump'])
+                    choices=['train', 'debug', 'eval', 'dump', 'classify'])
 parser.add_argument('--params', type=argparse.FileType('r'), 
                     default='default_params.json')
 parser.add_argument('--data', type=str, 
@@ -53,14 +53,14 @@ SEPERATOR = ' '
 if hasattr(params, 'splitter') and params.splitter == 'char':
   SEPERATOR = ''
 
-if args.mode in ('train', 'eval'):
+if args.mode in ('train', 'eval', 'classify'):
   mode = args.mode
   if args.partition_override:
     mode = 'all'
   splitter = 'word'
   if hasattr(params, 'splitter'):
     splitter = params.splitter
-  usernames, texts = ReadData(args.data, mode=mode, splitter=params.splitter)
+  usernames, texts = ReadData(args.data, mode=mode, splitter=splitter)
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
@@ -72,7 +72,7 @@ if args.mode == 'train':
   else:
     vocab = Vocab.MakeFromData(texts, min_count=20)
   username_vocab = Vocab.MakeFromData([[u] for u in usernames],
-                                      min_count=50)
+                                      min_count=50, no_special_syms=True)
   vocab.Save(os.path.join(args.expdir, 'word_vocab.pickle'))
   username_vocab.Save(os.path.join(args.expdir, 'username_vocab.pickle'))
   print 'num users {0}'.format(len(username_vocab))
@@ -119,7 +119,7 @@ def Train(expdir):
 
     a = session.run([model.cost, train_op], feed_dict)
 
-    if idx % 25 == 0:
+    if idx % 50 == 0:
       ws = [vocab[s[0, i]] for i in range(seq_len[0])]
       print SEPERATOR.join(ws)
       print float(a[0])
@@ -219,6 +219,43 @@ def GetText(s, seq_len):
   ws = [vocab[s[0, i]] for i in range(seq_len)]
   return ' '.join(ws)
 
+
+def Classify(expdir):
+  dataset.Prepare(vocab, username_vocab)
+
+  print 'loading model'
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+
+  all_labels = []
+  all_preds = []
+  for pos in xrange(min(dataset.GetNumBatches(), 400)):
+    s, seq_len, usernames = dataset.GetNextBatch()
+
+    feed_dict = {
+      model.x: s[:, :-1],
+      model.y: s[:, 1:],
+      model.seq_len: seq_len,
+      model.username: usernames
+    }
+
+    costs = []
+    labels = np.array(usernames)
+    for i in range(len(username_vocab)):
+
+      usernames[:] = i
+      feed_dict[model.username] = usernames
+    
+      sentence_costs =  session.run(model.per_sentence_loss, feed_dict)
+      costs.append(sentence_costs)
+
+    predictions = np.argmin(np.array(costs), 0)
+    all_preds += list(predictions)
+    all_labels += list(labels)
+  Metrics([username_vocab[i] for i in all_preds],
+          [username_vocab[i] for i in all_labels])
+
+
 def Eval(expdir):
   dataset.Prepare(vocab, username_vocab)
 
@@ -241,9 +278,6 @@ def Eval(expdir):
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
 
-    z = session.run(model.per_word_loss, feed_dict)
-    word_ids = feed_dict[model.y]
-
     lens = feed_dict[model.seq_len]
     unames = feed_dict[model.username]
 
@@ -259,12 +293,60 @@ def Eval(expdir):
   results = pandas.DataFrame(results)
   results.to_csv(os.path.join(expdir, 'pplstats.csv.gz'), compression='gzip')
 
-    
+
+def Metrics(preds, labs, show=True):
+  """Print precision, recall and F1 for each language.
+  Assumes a single language per example, i.e. no code switching.
+  Args:
+    preds: list of predictions
+    labs: list of labels
+    show: flag to toggle printing
+  """
+  all_langs = set(preds + labs)
+  preds = np.array(preds)
+  labs = np.array(labs)
+  label_totals = collections.Counter(labs)
+  pred_totals = collections.Counter(preds)
+  confusion_matrix = collections.Counter(zip(preds, labs))
+  num_correct = 0
+  for lang in all_langs:
+    num_correct += confusion_matrix[(lang, lang)]
+  acc = num_correct / float(len(preds))
+  print 'accuracy = {0:.3f}'.format(acc)
+  if show:
+    print ' Lang     Prec.   Rec.   F1'
+    print '------------------------------'
+  scores = []
+  fmt_str = '  {0:6}  {1:6.2f} {2:6.2f} {3:6.2f}'
+  for lang in sorted(all_langs):
+    idx = preds == lang
+    total = max(1.0, pred_totals[lang])
+    precision = 100.0 * confusion_matrix[(lang, lang)] / total
+    idx = labs == lang
+    total = max(1.0, label_totals[lang])
+    recall = 100.0 * confusion_matrix[(lang, lang)] / total
+    if precision + recall == 0.0:
+      f1 = 0.0
+    else:
+      f1 = 2.0 * precision * recall / (precision + recall)
+    scores.append([precision, recall, f1])
+    if show:
+      print fmt_str.format(lang, precision, recall, f1)
+  totals = np.array(scores).mean(axis=0)
+  if show:
+    print '------------------------------'
+    print fmt_str.format('Total:', totals[0], totals[1], totals[2])
+  return totals[2]
+
+
 if args.mode == 'train':
   Train(args.expdir)
 
 if args.mode == 'eval':
   Eval(args.expdir)
+
+if args.mode == 'classify':
+  Classify(args.expdir)
 
 if args.mode == 'debug':
   Debug(args.expdir)
