@@ -8,11 +8,12 @@ import logging
 import numpy as np
 import os
 import pandas
+import pickle
 import tensorflow as tf
 
 from model import HyperModel, PrintParams
 from vocab import Vocab
-from batcher import Dataset, ReadData
+from batcher import Dataset
 
 import code
 
@@ -60,41 +61,67 @@ if args.mode in ('train', 'eval', 'classify'):
   splitter = 'word'
   if hasattr(params, 'splitter'):
     splitter = params.splitter
-  usernames, texts = ReadData(args.data, mode=mode, splitter=splitter)
+
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
-  dataset.AddDataSource(usernames, texts)
+  dataset.ReadData(args.data, params.context_vars + ['text'],
+                   mode=mode, splitter=splitter)
 
 if args.mode == 'train':
-  if hasattr(params, 'vocab'):
-    vocab = Vocab.Load(params.vocab)
-  else:
-    vocab = Vocab.MakeFromData(texts, min_count=20)
-  username_vocab = Vocab.MakeFromData([[u] for u in usernames],
-                                      min_count=50, no_special_syms=True)
+  
+  vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
+  context_vocabs = {}
+  for context_var in params.context_vars:
+    v = Vocab.MakeFromData([[u] for u in dataset.GetColumn(context_var)],
+                           min_count=50, no_special_syms=True)
+    context_vocabs[context_var] = v
+    print 'num {0}: {1}'.format(context_var, len(v))
+    
   vocab.Save(os.path.join(args.expdir, 'word_vocab.pickle'))
-  username_vocab.Save(os.path.join(args.expdir, 'username_vocab.pickle'))
-  print 'num users {0}'.format(len(username_vocab))
   print 'vocab size {0}'.format(len(vocab))
+  with open(os.path.join(args.expdir, 'context_vocab.pickle'), 'wb') as f:
+    pickle.dump(context_vocabs, f)
 else:
   vocab = Vocab.Load(os.path.join(args.expdir, 'word_vocab.pickle'))
-  username_vocab = Vocab.Load(os.path.join(args.expdir, 'username_vocab.pickle'))
+  with open(os.path.join(args.expdir, 'context_vocab.pickle'), 'rb') as f:
+    context_vocabs = pickle.load(f)
 
 
 unigram_probs = vocab.GetUnigramProbs()
 use_nce_loss = args.mode == 'train'
-if len(unigram_probs) < 5000:
+if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
-model = HyperModel(params, unigram_probs, len(username_vocab), 
-                   use_nce_loss=use_nce_loss)
+model = HyperModel(
+  params, unigram_probs,
+  [len(context_vocabs[v]) for v in params.context_vars], 
+  use_nce_loss=use_nce_loss)
 
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
 
 
+def GetFeedDict(batch, use_dropout=True):
+  s = np.array(list(batch.text.values))  # hacky
+  feed_dict = {
+    model.x: s[:, :-1],
+    model.y: s[:, 1:],
+    model.seq_len: batch.seq_lens.values,
+    model.dropout_keep_prob: params.dropout_keep_prob
+  }
+
+  for context_var in params.context_vars:
+    placeholder = model.context_placeholders[context_var]
+    feed_dict[placeholder] = batch[context_var].values
+
+  if not use_dropout:
+    del feed_dict[model.dropout_keep_prob]
+
+  return feed_dict                
+  
+
 def Train(expdir):
-  dataset.Prepare(vocab, username_vocab)
+  dataset.Prepare(vocab, context_vocabs)
 
   logging.basicConfig(filename=os.path.join(expdir, 'logfile.txt'),
                       level=logging.INFO)
@@ -107,23 +134,13 @@ def Train(expdir):
   session.run(tf.initialize_all_variables())
 
   for idx in xrange(params.iters):
-    s, seq_len, usernames = dataset.GetNextBatch()
-
-    feed_dict = {
-      model.x: s[:, :-1],
-      model.y: s[:, 1:],
-      model.seq_len: seq_len,
-      model.username: usernames,
-      model.dropout_keep_prob: params.dropout_keep_prob
-    }
+    batch = dataset.GetNextBatch()
+    feed_dict = GetFeedDict(batch)
 
     a = session.run([model.cost, train_op], feed_dict)
 
     if idx % 50 == 0:
-      ws = [vocab[s[0, i]] for i in range(seq_len[0])]
-      print SEPERATOR.join(ws)
-      print float(a[0])
-      print '-------'
+      print idx, float(a[0])
       logging.info({'iter': idx, 'cost': float(a[0])})
 
       if idx % 1000 == 0:
@@ -185,13 +202,16 @@ def Greedy(expdir):
     words = []
     log_probs = []
     for i in xrange(50):
-      a = session.run([model.next_prob, model.next_c, model.next_h],
-                      {
-                        model.username: np.array([username_vocab[subname]]),
-                        model.prev_word: vocab[current_word],
-                        model.prev_c: prevstate_c,
-                        model.prev_h: prevstate_h,
-                      })
+      feed_dict = {                      
+        model.prev_word: vocab[current_word],
+        model.prev_c: prevstate_c,
+        model.prev_h: prevstate_h,
+      }
+      for context_var in params.context_vars:
+        placeholder = model.context_placeholders[context_var]
+        feed_dict[placeholder] = np.array([0])
+
+      a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_h, prevstate_c = a
       cumulative = np.cumsum(current_prob)
       current_word_id = np.argmin(cumulative < np.random.rand())
@@ -221,7 +241,7 @@ def GetText(s, seq_len):
 
 
 def Classify(expdir):
-  dataset.Prepare(vocab, username_vocab)
+  dataset.Prepare(vocab, context_vocabs)
 
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
@@ -230,21 +250,15 @@ def Classify(expdir):
   all_labels = []
   all_preds = []
   for pos in xrange(min(dataset.GetNumBatches(), 400)):
-    s, seq_len, usernames = dataset.GetNextBatch()
-
-    feed_dict = {
-      model.x: s[:, :-1],
-      model.y: s[:, 1:],
-      model.seq_len: seq_len,
-      model.username: usernames
-    }
+    batch = dataset.GetNextBatch()
+    feed_dict = GetFeedDict(batch, use_dropout=False)
+    langs = feed_dict[model.context_placeholders['lang']]
 
     costs = []
-    labels = np.array(usernames)
-    for i in range(len(username_vocab)):
-
-      usernames[:] = i
-      feed_dict[model.username] = usernames
+    labels = np.array(langs)
+    lang_vocab = context_vocabs['lang']
+    for i in range(len(lang_vocab)):
+      feed_dict[model.context_placeholders['lang']][:] = i
     
       sentence_costs =  session.run(model.per_sentence_loss, feed_dict)
       costs.append(sentence_costs)
@@ -252,12 +266,12 @@ def Classify(expdir):
     predictions = np.argmin(np.array(costs), 0)
     all_preds += list(predictions)
     all_labels += list(labels)
-  Metrics([username_vocab[i] for i in all_preds],
-          [username_vocab[i] for i in all_labels])
+  Metrics([lang_vocab[i] for i in all_preds],
+          [lang_vocab[i] for i in all_labels])
 
 
 def Eval(expdir):
-  dataset.Prepare(vocab, username_vocab)
+  dataset.Prepare(vocab, context_vocabs)
 
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
@@ -266,25 +280,20 @@ def Eval(expdir):
   total_log_prob = 0
   results = []
   for pos in xrange(min(dataset.GetNumBatches(), 400)):
-    s, seq_len, usernames = dataset.GetNextBatch()
-
-    feed_dict = {
-        model.x: s[:, :-1],
-        model.y: s[:, 1:],
-        model.seq_len: seq_len,
-        model.username: usernames
-    }
+    batch = dataset.GetNextBatch()
+    feed_dict = GetFeedDict(batch)
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
 
     lens = feed_dict[model.seq_len]
-    unames = feed_dict[model.username]
+    unames = feed_dict[model.context_placeholders['lang']]
 
     for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
-      results.append({'length': length, 'uname': username_vocab[uname],
+      results.append({'length': length, 'uname': context_vocabs['lang'][uname],
                       'cost': sentence_cost})
 
+    seq_len = feed_dict[model.seq_len]
     total_word_count += sum(seq_len)
     total_log_prob += float(cost * sum(seq_len))
     ppl = np.exp(total_log_prob / total_word_count)
@@ -349,7 +358,7 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  Debug(args.expdir)
+  #Debug(args.expdir)
   Greedy(args.expdir)
 
 if args.mode == 'dump':

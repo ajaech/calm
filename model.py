@@ -56,11 +56,11 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
 
 class HyperCell(rnn_cell.RNNCell):
 
-  def __init__(self, num_units, user_embeds, mikolov_adapt=False, hyper_adapt=False):
+  def __init__(self, num_units, context_embed, mikolov_adapt=False, hyper_adapt=False):
     self._num_units = num_units
     self._forget_bias = 1.0
     self._activation = tf.tanh
-    self.user_embeds = user_embeds
+    self.context_embed = context_embed
     self.mikolov_adapt = mikolov_adapt
     self.hyper_adapt = hyper_adapt
 
@@ -68,7 +68,7 @@ class HyperCell(rnn_cell.RNNCell):
       if self.hyper_adapt:
         self.adaptation_weights = tf.get_variable(
           'adaptation_weights', 
-          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+          [context_embed.get_shape()[1].value, 4 * self._num_units])
         self.adaptation_bias = tf.get_variable(
           'adaptation_bias', [4 * self._num_units],
           initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
@@ -76,7 +76,7 @@ class HyperCell(rnn_cell.RNNCell):
       if self.mikolov_adapt:
         self.biases = tf.get_variable(
           'mikolov_biases', 
-          [self.user_embeds.get_shape()[1].value, 4 * self._num_units])
+          [context_embed.get_shape()[1].value, 4 * self._num_units])
 
   @property
   def state_size(self):
@@ -96,12 +96,12 @@ class HyperCell(rnn_cell.RNNCell):
 
       if self.hyper_adapt:
         adaptation_coeff = tf.nn.relu(
-          tf.matmul(self.user_embeds, self.adaptation_weights) 
+          tf.matmul(self.context_embed, self.adaptation_weights) 
           + self.adaptation_bias)
         adapted = tf.mul(adaptation_coeff, adapted)
         
       if self.mikolov_adapt:
-        delta = tf.matmul(self.user_embeds, self.biases)
+        delta = tf.matmul(self.context_embed, self.biases)
         adapted += delta
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
@@ -119,35 +119,59 @@ class HyperCell(rnn_cell.RNNCell):
 class BaseModel(object):
   """Hold the code that is shared between all model varients."""
 
-  def __init__(self, params, unigram_probs, user_size=None):
+  def __init__(self, params, unigram_probs, context_vocab_sizes=None):
     self.unigram_probs = unigram_probs
     self.max_length = params.max_len
     self.vocab_size = len(unigram_probs)
+    self.num_context_vars = len(context_vocab_sizes)
     self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
     self.y = tf.placeholder(tf.int64, [params.batch_size, self.max_length], name='y')
     self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
 
-    self._embedding_dims = params.embedding_dims
-    self.username = tf.placeholder(tf.int64, [None], name='username')
-    enable_user_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
-                          or params.use_softmax_adaptation)
-    if enable_user_embeds:
-      self._user_embeddings = tf.get_variable(
-        'user_embeddings', [user_size, params.user_embedding_size])
-      self._uembeds = tf.nn.embedding_lookup(self._user_embeddings, self.username)
+
+    enable_context_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
+                             or params.use_softmax_adaptation)
+    if enable_context_embeds:
+
+      self._embedding_dims = params.embedding_dims
+      self.context_placeholders = {}
+      self.context_embeddings = {}
+      for i in range(self.num_context_vars):
+        self.context_placeholders[params.context_vars[i]] = tf.placeholder(
+          tf.int64, [None], name='context_var{0}'.format(i))
+        self.context_embeddings[params.context_vars[i]] = tf.get_variable(
+          'context_embedding{0}'.format(i), 
+          [context_vocab_sizes[i], params.context_embed_sizes[i]])
+
+      context_embeds = []
+      for context_var in params.context_vars:
+        context_embeds.append(tf.nn.embedding_lookup(
+          self.context_embeddings[context_var], self.context_placeholders[context_var]))
+
+      if len(context_embeds) == 1:
+        self.final_context_embed = context_embeds[0]
+      else:
+        context_embeds = tf.concat(1, context_embeds)
+
+        context_mlp = tf.get_variable(
+          'context_mlp', [sum(params.context_embed_sizes), params.context_embed_size])
+        context_bias = tf.get_variable('context_bias', [params.context_embed_size])
+        
+        self.final_context_embed = tf.nn.tanh(tf.matmul(context_embeds, context_mlp) + 
+                                              context_bias)
       
     if params.use_softmax_adaptation:
       self._word_embeddings = tf.get_variable(
         'word_embeddings', [self.vocab_size, self._embedding_dims +
-                            params.user_embedding_size])
+                            params.context_embed_size])
     else:
       self._word_embeddings = tf.get_variable(
         'word_embeddings', [self.vocab_size, self._embedding_dims])
 
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
 
-    if params.use_softmax_adaptation:  # chop off the user embedding part
-      self._inputs = self._inputs[:, :, params.user_embedding_size:]
+    if params.use_softmax_adaptation:  # chop off the context embedding part
+      self._inputs = self._inputs[:, :, params.context_embed_size:]
 
     self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
 
@@ -229,7 +253,7 @@ class BaseModel(object):
     prev_embed = tf.expand_dims(prev_embed, 0)
 
     if params.use_softmax_adaptation:
-      prev_embed = prev_embed[:, params.user_embedding_size:]
+      prev_embed = prev_embed[:, params.context_embed_size:]
     
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
@@ -243,12 +267,13 @@ class BaseModel(object):
 
 class HyperModel(BaseModel):
 
-  def __init__(self, params, unigram_probs, user_size, use_nce_loss=True):
-    super(HyperModel, self).__init__(params, unigram_probs, user_size=user_size)
+  def __init__(self, params, unigram_probs, context_vocab_sizes, use_nce_loss=True):
+    super(HyperModel, self).__init__(params, unigram_probs,
+                                     context_vocab_sizes=context_vocab_sizes)
 
     uembeds = None
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
-      uembeds = self._uembeds
+      uembeds = self.final_context_embed
 
     cell = HyperCell(params.cell_size, uembeds, mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
