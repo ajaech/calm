@@ -123,17 +123,15 @@ class BaseModel(object):
     self.unigram_probs = unigram_probs
     self.max_length = params.max_len
     self.vocab_size = len(unigram_probs)
+    self._embedding_dims = params.embedding_dims
     self.num_context_vars = len(context_vocab_sizes)
     self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
     self.y = tf.placeholder(tf.int64, [params.batch_size, self.max_length], name='y')
     self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
 
-
     enable_context_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
                              or params.use_softmax_adaptation)
     if enable_context_embeds:
-
-      self._embedding_dims = params.embedding_dims
       self.context_placeholders = {}
       self.context_embeddings = {}
       for i in range(self.num_context_vars):

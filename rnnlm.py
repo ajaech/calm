@@ -9,13 +9,17 @@ import numpy as np
 import os
 import pandas
 import pickle
+import shutil
+import sys
 import tensorflow as tf
 
 from model import HyperModel, PrintParams
 from vocab import Vocab
 from batcher import Dataset
+import metrics
 
 import code
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
@@ -25,15 +29,30 @@ parser.add_argument('--params', type=argparse.FileType('r'),
                     default='default_params.json')
 parser.add_argument('--data', type=str, 
                     default='/n/falcon/s0/ajaech/reddit.tsv.bz2')
-parser.add_argument('--partition_override', type=bool, default=False)
+parser.add_argument('--partition_override', type=bool, default=False,
+                    help='use to skip train/test partitioning')
 parser.add_argument('--threads', type=int, default=12)
+parser.add_argument('--initialize', default=None)
 args = parser.parse_args()
+
+if args.initialize is not None and args.mode != 'train':
+  sys.stderr.write('ERROR: dont use initialize arg when mode is not train.\n')
+  exit(-1)
 
 if not os.path.exists(args.expdir):
   os.mkdir(args.expdir)
 
 param_filename = os.path.join(args.expdir, 'params.json')
-if args.mode == 'train':
+if args.initialize:  # copy over vocab & param files
+  param_filename = os.path.join(args.initialize, 'params.json')
+  shutil.copyfile(os.path.join(args.initialize, 'word_vocab.pickle'),
+                  os.path.join(args.expdir, 'word_vocab.pickle'))
+  shutil.copyfile(os.path.join(args.initialize, 'context_vocab.pickle'),
+                  os.path.join(args.expdir, 'context_vocab.pickle'))
+  shutil.copyfile(os.path.join(args.initialize, 'params.json'),
+                  os.path.join(args.expdir, 'params.json'))
+
+if args.mode == 'train' and args.initialize is None:
   param_dict = json.load(args.params)
   params = bunch.Bunch(param_dict)
   with open(param_filename, 'w') as f:
@@ -68,8 +87,7 @@ if args.mode in ('train', 'eval', 'classify'):
   dataset.ReadData(args.data, params.context_vars + ['text'],
                    mode=mode, splitter=splitter)
 
-if args.mode == 'train':
-  
+if args.mode == 'train' and args.initialize is None:
   vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
   context_vocabs = {}
   for context_var in params.context_vars:
@@ -100,7 +118,6 @@ model = HyperModel(
 saver = tf.train.Saver(tf.all_variables())
 session = tf.Session(config=config)
 
-
 def GetFeedDict(batch, use_dropout=True):
   s = np.array(list(batch.text.values))  # hacky
   feed_dict = {
@@ -110,9 +127,10 @@ def GetFeedDict(batch, use_dropout=True):
     model.dropout_keep_prob: params.dropout_keep_prob
   }
 
-  for context_var in params.context_vars:
-    placeholder = model.context_placeholders[context_var]
-    feed_dict[placeholder] = batch[context_var].values
+  if hasattr(model, 'context_placeholders'):
+    for context_var in params.context_vars:
+      placeholder = model.context_placeholders[context_var]
+      feed_dict[placeholder] = batch[context_var].values
 
   if not use_dropout:
     del feed_dict[model.dropout_keep_prob]
@@ -132,6 +150,9 @@ def Train(expdir):
 
   print('initalizing')
   session.run(tf.initialize_all_variables())
+
+  if args.initialize:
+    saver.restore(session, os.path.join(args.initialize, 'model.bin'))
 
   for idx in xrange(params.iters):
     batch = dataset.GetNextBatch()
@@ -246,10 +267,10 @@ def Classify(expdir):
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-
+  results = []
   all_labels = []
   all_preds = []
-  for pos in xrange(min(dataset.GetNumBatches(), 400)):
+  for pos in xrange(dataset.GetNumBatches()):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
     langs = feed_dict[model.context_placeholders['lang']]
@@ -263,11 +284,19 @@ def Classify(expdir):
       sentence_costs =  session.run(model.per_sentence_loss, feed_dict)
       costs.append(sentence_costs)
 
+    lang_names = [lang_vocab[i] for i in range(len(lang_vocab))]
+    for label, c_array in zip(labels, np.array(costs).T):
+      d = dict(zip(lang_names, c_array))
+      d['label'] = lang_vocab[label]
+      results.append(d)
+
     predictions = np.argmin(np.array(costs), 0)
     all_preds += list(predictions)
     all_labels += list(labels)
-  Metrics([lang_vocab[i] for i in all_preds],
-          [lang_vocab[i] for i in all_labels])
+  df = pandas.DataFrame(results)
+  df.to_csv(os.path.join(expdir, 'classify.csv'))
+  metrics.Metrics([lang_vocab[i] for i in all_preds],
+                  [lang_vocab[i] for i in all_labels])
 
 
 def Eval(expdir):
@@ -279,7 +308,7 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 400)):
+  for pos in xrange(dataset.GetNumBatches()):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch)
 
@@ -301,51 +330,6 @@ def Eval(expdir):
   
   results = pandas.DataFrame(results)
   results.to_csv(os.path.join(expdir, 'pplstats.csv.gz'), compression='gzip')
-
-
-def Metrics(preds, labs, show=True):
-  """Print precision, recall and F1 for each language.
-  Assumes a single language per example, i.e. no code switching.
-  Args:
-    preds: list of predictions
-    labs: list of labels
-    show: flag to toggle printing
-  """
-  all_langs = set(preds + labs)
-  preds = np.array(preds)
-  labs = np.array(labs)
-  label_totals = collections.Counter(labs)
-  pred_totals = collections.Counter(preds)
-  confusion_matrix = collections.Counter(zip(preds, labs))
-  num_correct = 0
-  for lang in all_langs:
-    num_correct += confusion_matrix[(lang, lang)]
-  acc = num_correct / float(len(preds))
-  print 'accuracy = {0:.3f}'.format(acc)
-  if show:
-    print ' Lang     Prec.   Rec.   F1'
-    print '------------------------------'
-  scores = []
-  fmt_str = '  {0:6}  {1:6.2f} {2:6.2f} {3:6.2f}'
-  for lang in sorted(all_langs):
-    idx = preds == lang
-    total = max(1.0, pred_totals[lang])
-    precision = 100.0 * confusion_matrix[(lang, lang)] / total
-    idx = labs == lang
-    total = max(1.0, label_totals[lang])
-    recall = 100.0 * confusion_matrix[(lang, lang)] / total
-    if precision + recall == 0.0:
-      f1 = 0.0
-    else:
-      f1 = 2.0 * precision * recall / (precision + recall)
-    scores.append([precision, recall, f1])
-    if show:
-      print fmt_str.format(lang, precision, recall, f1)
-  totals = np.array(scores).mean(axis=0)
-  if show:
-    print '------------------------------'
-    print fmt_str.format('Total:', totals[0], totals[1], totals[2])
-  return totals[2]
 
 
 if args.mode == 'train':

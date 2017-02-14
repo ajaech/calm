@@ -24,6 +24,26 @@ def CharSplitter(text):
   return list(text.strip())
 
 
+def NgramSplitter(text):
+  chars = list(text.strip())
+  return [c if c != ' ' else 'SPACE' for c in chars]
+
+
+def ReadData(filename, columns, mode, limit):
+  with GetFileHandle(filename) as f:
+    data = pandas.read_csv(f, sep='\t', nrows=limit, header=None)
+    data = data.fillna('')
+  if columns:
+    data.columns = columns
+
+  if mode != 'all':
+    if mode == 'train':
+      data = data[(data.index.values - 1) % 10 > 1]
+    elif mode == 'eval':
+      data = data[(data.index.values - 1) % 10 <= 1]
+  return data
+
+
 class Dataset(object):
 
   def __init__(self, max_len=35, batch_size=100, preshuffle=True, name='unnamed'):
@@ -42,15 +62,7 @@ class Dataset(object):
     return self.data[name]
 
   def ReadData(self, filename, columns, limit=10000000, mode='train', splitter='word'):
-    with GetFileHandle(filename) as f:
-      data = pandas.read_csv(f, sep='\t', nrows=limit)
-    data.columns = columns
-
-    if mode != 'all':
-      if mode == 'train':
-        data = data[data.index.values % 10 > 1]
-      elif mode == 'eval':
-        data = data[data.index.values % 10 <= 1]
+    data = ReadData(filename, columns, mode, limit)
 
     SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
     data['text'] = data['text'].apply(SplitFunc)
@@ -111,10 +123,12 @@ if __name__ == '__main__':
   parser.add_argument('--out')
   args = parser.parse_args()
 
-  usernames, texts = ReadData(args.filename, mode=args.mode)
+  data = ReadData(args.filename, mode=args.mode, columns=None,
+                  limit=None)
+  usernames = data[0]
+  texts = data[2].apply(NgramSplitter)
   with open(args.out, 'w') as f:
     for uname, t in zip(usernames, texts):
       f.write('{0}\t'.format(uname))
       f.write(' '.join(t[1:-1]))
       f.write('\n')
-      
