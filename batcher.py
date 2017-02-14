@@ -29,18 +29,13 @@ def NgramSplitter(text):
   return [c if c != ' ' else 'SPACE' for c in chars]
 
 
-def ReadData(filename, columns, mode, limit):
+def ReadData(filename, columns, limit):
   with GetFileHandle(filename) as f:
     data = pandas.read_csv(f, sep='\t', nrows=limit, header=None)
     data = data.fillna('')
   if columns:
     data.columns = columns
 
-  if mode != 'all':
-    if mode == 'train':
-      data = data[(data.index.values - 1) % 10 > 1]
-    elif mode == 'eval':
-      data = data[(data.index.values - 1) % 10 <= 1]
   return data
 
 
@@ -62,11 +57,22 @@ class Dataset(object):
     return self.data[name]
 
   def ReadData(self, filename, columns, limit=10000000, mode='train', splitter='word'):
-    data = ReadData(filename, columns, mode, limit)
+    data = ReadData(filename, columns, limit)
 
     SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
     data['text'] = data['text'].apply(SplitFunc)
-    self.data = data
+    
+    self.valdata = None
+    if mode == 'all':
+      self.data = data
+    else:
+      train_data = data[(data.index.values - 1) % 10 > 1]
+      eval_data = data[(data.index.values - 1) % 10 <= 1]
+      if mode == 'train':
+        self.data = train_data
+        self.valdata = eval_data.reset_index(drop=True)
+      elif mode == 'eval':
+        self.data = eval_data.reset_index(drop=True)
 
   def GetSentences(self):
     return self.data['text']
@@ -80,32 +86,35 @@ class Dataset(object):
     return np.array(ids)
 
   def Prepare(self, word_vocab, context_vocabs):
-    self.data['seq_lens'] = self.data['text'].apply(
-      lambda x: min(len(x), self._max_len))
-    
     self.current_idx = 0
 
-    self.data['text'] = self.data['text'].apply(
-      lambda x: self.GetNumberLine(x, word_vocab, self._max_len))
+    self._Prepare(self.data, word_vocab, context_vocabs)
+    if self.valdata is not None:
+      self._Prepare(self.valdata, word_vocab, context_vocabs)
+      self.current_val_idx = 0
 
-    for context_var in context_vocabs:
-      self.data[context_var] = self.data[context_var].apply(
-        lambda x: context_vocabs[context_var][x])
-
-    self.N = len(self.data)
     if self.preshuffle:
       self._Permute()
 
+  def _Prepare(self, df, word_vocab, context_vocabs):
+    df['seq_lens'] = df['text'].apply(
+      lambda x: min(len(x), self._max_len))
+    df['text'] = df['text'].apply(
+      lambda x: self.GetNumberLine(x, word_vocab, self._max_len))
+    for context_var in context_vocabs:
+      df[context_var] = df[context_var].apply(
+        lambda x: context_vocabs[context_var][x])
+
   def GetNumBatches(self):
     """Returns num batches per epoch."""
-    return self.N / self.batch_size
+    return len(self.data) / self.batch_size
 
   def _Permute(self):
     """Shuffle the training data."""
     self.data = self.data.sample(frac=1).reset_index(drop=True)
 
   def GetNextBatch(self):
-    if self.current_idx + self.batch_size > self.N:
+    if self.current_idx + self.batch_size > len(self.data):
       self.current_idx = 0
 
       self._Permute()    
@@ -115,6 +124,13 @@ class Dataset(object):
 
     return self.data.iloc[idx]
 
+  def GetValBatch(self):
+    if self.current_val_idx + self.batch_size > len(self.valdata):
+      self.current_val_idx = 0
+
+    idx = range(self.current_val_idx, self.current_val_idx + self.batch_size)
+    self.current_val_idx += self.batch_size
+    return self.data.iloc[idx]
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()

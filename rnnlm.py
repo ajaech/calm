@@ -154,15 +154,19 @@ def Train(expdir):
   if args.initialize:
     saver.restore(session, os.path.join(args.initialize, 'model.bin'))
 
+  avgcost = metrics.MovingAvg(0.90)
   for idx in xrange(params.iters):
     batch = dataset.GetNextBatch()
-    feed_dict = GetFeedDict(batch)
+    feed_dict = GetFeedDict(batch, use_dropout=True)
 
-    a = session.run([model.cost, train_op], feed_dict)
+    cost, _ = session.run([model.cost, train_op], feed_dict)
 
-    if idx % 50 == 0:
-      print idx, float(a[0])
-      logging.info({'iter': idx, 'cost': float(a[0])})
+    if idx % 40 == 0:
+      feed_dict = GetFeedDict(dataset.GetValBatch(), use_dropout=False)
+      val_cost = session.run(model.cost, feed_dict)
+      print idx, cost
+      logging.info({'iter': idx, 'cost': avgcost.Update(cost),
+                    'rawcost': cost, 'valcost': val_cost})
 
       if idx % 1000 == 0:
         saver.save(session, os.path.join(expdir, 'model.bin'))

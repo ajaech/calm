@@ -48,3 +48,17 @@ def Metrics(preds, labs, show=True):
   return totals[2]
 
 
+class MovingAvg(object):
+  
+  def __init__(self, p):
+    self.val = None
+    self.p = p
+
+  def Update(self, v):
+    if self.val is None:
+      self.val = v
+      return v
+    self.val = self.p * self.val + (1.0 - self.p) * v
+    return self.val
+      
+  
