@@ -68,15 +68,15 @@ class HyperCell(rnn_cell.RNNCell):
       if self.hyper_adapt:
         self.adaptation_weights = tf.get_variable(
           'adaptation_weights', 
-          [context_embed.get_shape()[1].value, 4 * self._num_units])
+          [context_embed.get_shape()[1].value, 3 * self._num_units])
         self.adaptation_bias = tf.get_variable(
-          'adaptation_bias', [4 * self._num_units],
-          initializer=tf.constant_initializer(np.ones(4 * self._num_units)))
+          'adaptation_bias', [3 * self._num_units],
+          initializer=tf.constant_initializer(np.ones(3 * self._num_units)))
 
       if self.mikolov_adapt:
         self.biases = tf.get_variable(
           'mikolov_biases', 
-          [context_embed.get_shape()[1].value, 4 * self._num_units])
+          [context_embed.get_shape()[1].value, 3 * self._num_units])
 
   @property
   def state_size(self):
@@ -90,7 +90,7 @@ class HyperCell(rnn_cell.RNNCell):
     with vs.variable_scope("hyper_lstm_cell", reuse=reuse):
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
-      adapted = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
+      adapted = _linear([inputs, h], 3 * self._num_units, True, scope=scope)
 
       if self.hyper_adapt:
         adaptation_coeff = (tf.matmul(self.context_embed, self.adaptation_weights)
@@ -102,10 +102,11 @@ class HyperCell(rnn_cell.RNNCell):
         adapted += delta
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
-      i, j, f, o = tf.split(1, 4, adapted)
+      j, f, o = tf.split(1, 3, adapted)
+      forget_gate = tf.sigmoid(f + self._forget_bias)
+      input_gate = 1.0 - forget_gate
 
-      new_c = (c * tf.sigmoid(f + self._forget_bias) + tf.sigmoid(i) *
-               self._activation(j))
+      new_c = (c * forget_gate + input_gate * self._activation(j))
       new_h = self._activation(new_c) * tf.sigmoid(o)
 
       new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
@@ -174,17 +175,15 @@ class BaseModel(object):
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
-  def OutputHelper(self, outputs, params, use_nce_loss=True):
-    reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
-
-    proj_out =  tf.reshape(reshaped_outputs, [outputs.get_shape()[0].value,
-                                       outputs.get_shape()[1].value, -1])
-
+  def OutputHelper(self, reshaped_outputs, params, use_nce_loss=True):
     if use_nce_loss:
+      proj_out =  tf.reshape(reshaped_outputs, [outputs.get_shape()[0].value,
+                                                outputs.get_shape()[1].value, -1])
+
       losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
       masked_loss = tf.mul(losses, self._mask)
     else:
-      masked_loss = self.ComputeLoss(proj_out, self._word_embeddings)
+      masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings)
       self.masked_loss = masked_loss
 
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
@@ -214,9 +213,7 @@ class BaseModel(object):
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
-  def ComputeLoss(self, outputs, out_embeddings, user_embeddings=None):
-    reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
-
+  def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None):
     if user_embeddings is not None:
       replicated = tf.concat(0, [user_embeddings for _ in range(35)])
       reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
@@ -230,7 +227,7 @@ class BaseModel(object):
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
 
-    self.per_word_loss = tf.reshape(masked_loss, outputs.get_shape()[:2])
+    self.per_word_loss = tf.reshape(masked_loss, [-1, self.max_length])
     per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
     self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
 
@@ -279,9 +276,7 @@ class HyperModel(BaseModel):
                                    sequence_length=self.seq_len)
     reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
     projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
-    proj_out3d = tf.reshape(projected_outputs, [-1, params.max_len, 
-                                                params.embedding_dims])
-    self.OutputHelper(proj_out3d, params, use_nce_loss=use_nce_loss)
+    self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss)
 
     #self.CreateDecodingGraph(cell, params)
 
