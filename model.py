@@ -87,17 +87,14 @@ class HyperCell(rnn_cell.RNNCell):
     return self._num_units
 
   def __call__(self, inputs, state, scope=None, reuse=None):
-    """Long short-term memory cell (LSTM)."""
-
     with vs.variable_scope("hyper_lstm_cell", reuse=reuse):
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
       adapted = _linear([inputs, h], 4 * self._num_units, True, scope=scope)
 
       if self.hyper_adapt:
-        adaptation_coeff = tf.nn.relu(
-          tf.matmul(self.context_embed, self.adaptation_weights) 
-          + self.adaptation_bias)
+        adaptation_coeff = (tf.matmul(self.context_embed, self.adaptation_weights)
+                            + self.adaptation_bias)
         adapted = tf.mul(adaptation_coeff, adapted)
         
       if self.mikolov_adapt:
@@ -112,7 +109,6 @@ class HyperCell(rnn_cell.RNNCell):
       new_h = self._activation(new_c) * tf.sigmoid(o)
 
       new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
-
       return new_h, new_state
 
 
@@ -156,22 +152,20 @@ class BaseModel(object):
         context_bias = tf.get_variable('context_bias', [params.context_embed_size])
         
         self.final_context_embed = tf.nn.tanh(tf.matmul(context_embeds, context_mlp) + 
-                                              context_bias)
-      
-    if params.use_softmax_adaptation:
-      self._word_embeddings = tf.get_variable(
-        'word_embeddings', [self.vocab_size, self._embedding_dims +
-                            params.context_embed_size])
-    else:
-      self._word_embeddings = tf.get_variable(
-        'word_embeddings', [self.vocab_size, self._embedding_dims])
+                                              context_bias)      
+    self._word_embeddings = tf.get_variable(
+      'word_embeddings', [self.vocab_size, self._embedding_dims])
 
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
 
-    if params.use_softmax_adaptation:  # chop off the context embedding part
-      self._inputs = self._inputs[:, :, params.context_embed_size:]
-
     self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
+    # optionally concatenate the context embeddings to the outputs
+    if params.use_softmax_adaptation:
+      self.softmax_adapter = tf.get_variable(
+        'softmax_adapter', [self.final_context_embed.get_shape()[1], self.vocab_size])
+      self.adapted_bias = tf.reduce_sum(tf.matmul(
+        self.final_context_embed, self.softmax_adapter), 0)
+      self.base_bias += self.adapted_bias
 
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
@@ -180,11 +174,10 @@ class BaseModel(object):
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
-  def OutputHelper(self, outputs, linear_proj, params, use_nce_loss=True):
+  def OutputHelper(self, outputs, params, use_nce_loss=True):
     reshaped_outputs = tf.reshape(outputs, [-1, outputs.get_shape()[-1].value])
-    projected = tf.matmul(reshaped_outputs, linear_proj)
 
-    proj_out =  tf.reshape(projected, [outputs.get_shape()[0].value,
+    proj_out =  tf.reshape(reshaped_outputs, [outputs.get_shape()[0].value,
                                        outputs.get_shape()[1].value, -1])
 
     if use_nce_loss:
@@ -229,8 +222,8 @@ class BaseModel(object):
       reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
 
     reshaped_mask = tf.reshape(self._mask, [-1])
-    
     reshaped_labels = tf.reshape(self.y, [-1])
+
     reshaped_logits = tf.matmul(
       reshaped_outputs, out_embeddings, transpose_b=True) + self.base_bias
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -243,7 +236,7 @@ class BaseModel(object):
 
     return masked_loss
 
-  def CreateDecodingGraph(self, cell, linear_proj, params):
+  def CreateDecodingGraph(self, cell, params):
     self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
     self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
     self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
@@ -256,10 +249,9 @@ class BaseModel(object):
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
       result, (self.next_c, self.next_h) = cell(prev_embed, state)
-    projected = tf.matmul(result, linear_proj)
-    logits = tf.matmul(projected, self._word_embeddings, transpose_b=True) + self.base_bias
+    logits = tf.matmul(result, self._word_embeddings, transpose_b=True) + self.base_bias
     self.next_idx = tf.argmax(logits, 1)
-    self.temperature = tf.placeholder_with_default([0.2], [1])
+    self.temperature = tf.placeholder_with_default([1.0], [1])
     self.next_prob = tf.nn.softmax(logits / self.temperature)
 
 
@@ -273,20 +265,25 @@ class HyperModel(BaseModel):
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
       uembeds = self.final_context_embed
 
-    cell = HyperCell(params.cell_size, uembeds, mikolov_adapt=params.use_mikolov_adaptation,
+    cell = HyperCell(params.cell_size, uembeds,
+                     mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
 
     regularized_cell = rnn_cell.DropoutWrapper(
       cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
+
+    self.linear_proj = tf.get_variable(
+      'linear_proj', [params.cell_size, params.embedding_dims])
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
+    reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
+    projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
+    proj_out3d = tf.reshape(projected_outputs, [-1, params.max_len, 
+                                                params.embedding_dims])
+    self.OutputHelper(proj_out3d, params, use_nce_loss=use_nce_loss)
 
-    linear_proj = tf.get_variable(
-      'linear_proj', [params.cell_size, self._word_embeddings.get_shape()[1]])
-    self.OutputHelper(outputs, linear_proj, params, use_nce_loss=use_nce_loss)
-
-    self.CreateDecodingGraph(cell, linear_proj, params)
+    #self.CreateDecodingGraph(cell, params)
 
 
 def PrintParams(handle=sys.stdout.write):

@@ -2,6 +2,7 @@
 import argparse
 import bunch
 import collections
+import copy
 import gzip
 import json
 import logging
@@ -12,6 +13,7 @@ import pickle
 import shutil
 import sys
 import tensorflow as tf
+import time
 
 from model import HyperModel, PrintParams
 from vocab import Vocab
@@ -155,6 +157,7 @@ def Train(expdir):
     saver.restore(session, os.path.join(args.initialize, 'model.bin'))
 
   avgcost = metrics.MovingAvg(0.90)
+  start_time = time.time()
   for idx in xrange(params.iters):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=True)
@@ -162,6 +165,12 @@ def Train(expdir):
     cost, _ = session.run([model.cost, train_op], feed_dict)
 
     if idx % 40 == 0:
+      end_time = time.time()
+      time_diff = end_time - start_time
+      start_time = end_time
+      batches_per_second = time_diff / 40
+      print 'batches per second {0}'.format(batches_per_second)
+
       feed_dict = GetFeedDict(dataset.GetValBatch(), use_dropout=False)
       val_cost = session.run(model.cost, feed_dict)
       print idx, cost
@@ -205,21 +214,83 @@ def Debug(expdir):
   base_bias = session.run(model.base_bias)
   Process(base_bias.T, 'Baseline')
 
-  uword = model._word_embeddings[:, :params.user_embedding_size]
-  subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model._user_embeddings[subreddit, :], 1))
+  uword = model._word_embeddings[:, :params.context_embed_size]
+  m = model
+  code.interact(local=locals())
+  
+  scores = tf.matmul(uword, tf.expand_dims(model.final_context_embed, 1))
 
-  for subname in ['exmormon', 'AskMen', 'AskWomen', 'Music', 'aww',
-                  'dogs', 'cats', 'worldnews', 'tifu', 'books', 'WTF',
-                  'RealGirls', 'relationships', 'Android']:
-    s = session.run(scores, {subreddit: username_vocab[subname]})
+  subnames = ['en', 'es', 'pt', 'de', 'it']
+  for subname in subnames:
+    s = session.run(scores, {model.context_placeholders['lang']:
+                             context_vocabs['lang'][subname]})
     Process(s, subname)
 
+
+class BeamItem(object):
+  
+  def __init__(self, prev_word, prev_c, prev_h):
+    self.log_probs = [0.0]
+    self.words = [prev_word]
+    self.prev_c = prev_c
+    self.prev_h = prev_h
+
+  def Update(self, log_prob, new_word, new_c, new_h):
+    self.prev_c = new_c
+    self.prev_h = new_h
+    self.words.append(new_word)
+    self.log_probs.append(log_prob)
+
+  def Cost(self):
+    return sum(self.log_probs)
+
+
+def BeamSearch(expdir):
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+  varname = 'lang'
+  subname = 'en'
+
+  beam_size = 12
+  current_word = '<S>'
+  prevstate_h = np.zeros((1, params.cell_size))
+  prevstate_c = np.zeros((1, params.cell_size))
+  beam_items = []
+
+  # initalize beam
+  beam_items.append(BeamItem('<S>', prevstate_h, prevstate_c))
+
+  for i in xrange(30):
+    new_beam_items = []
+    for beam_item in beam_items:
+      feed_dict = {
+        model.prev_word: vocab[beam_item.words[-1]],
+        model.prev_c: beam_item.prev_c,
+        model.prev_h: beam_item.prev_h
+      }
+      for context_var in params.context_vars:
+        placeholder = model.context_placeholders[context_var]
+        if context_var == varname:
+          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+        else:
+          feed_dict[placeholder] = np.array([0])
+
+      a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
+      current_prob, prevstate_h, prevstate_c = a
+      top_entries = np.argsort(current_prob)[0, -beam_size:]
+      top_values = current_prob[0, top_entries]
+      for top_entry, top_value in zip(top_entries, top_values):
+        new_beam = copy.deepcopy(beam_item)
+        new_beam.Update(-np.log(top_value), vocab[top_entry], prevstate_c, prevstate_h)
+        new_beam_items.append(new_beam)
+      new_beam_items = sorted(new_beam_items, key=lambda x: x.Cost())
+      beam_items = new_beam_items[:5]
+  code.interact(local=locals())
 
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(subname):
+  def Process(varname, subname):
     current_word = '<S>'
     prevstate_h = np.zeros((1, params.cell_size))
     prevstate_c = np.zeros((1, params.cell_size))
@@ -234,7 +305,10 @@ def Greedy(expdir):
       }
       for context_var in params.context_vars:
         placeholder = model.context_placeholders[context_var]
-        feed_dict[placeholder] = np.array([0])
+        if context_var == varname:
+          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+        else:
+          feed_dict[placeholder] = np.array([1])
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_h, prevstate_c = a
@@ -245,18 +319,17 @@ def Greedy(expdir):
       words.append(current_word)
       if '</S>' in current_word:
         break
-    
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
   sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
                  'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'hockey']
-  sample_list = ['en', 'fr', 'pt', 'es', 'und']
+  sample_list = ['en', 'fr', 'pt', 'es', 'eu']
 
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
     for _ in range(5):
-      ppl, sentence = Process(n)
+      ppl, sentence = Process('lang', n)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
@@ -320,7 +393,10 @@ def Eval(expdir):
                                        feed_dict)
 
     lens = feed_dict[model.seq_len]
-    unames = feed_dict[model.context_placeholders['lang']]
+    if hasattr(model, 'context_placeholders'):
+      unames = feed_dict[model.context_placeholders['lang']]
+    else: 
+      unames = ['None'] * len(lens)
 
     for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
       results.append({'length': length, 'uname': context_vocabs['lang'][uname],
@@ -346,8 +422,8 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  #Debug(args.expdir)
-  Greedy(args.expdir)
+  Debug(args.expdir)
+  #BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
