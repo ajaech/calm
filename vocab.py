@@ -43,6 +43,7 @@ class Vocab(object):
       if token_counts[word] >= min_count:
         tokenset.add(word)
       else:
+        tokenset.add(unk_symbol)
         token_counts[unk_symbol] += token_counts[word]
 
     if not no_special_syms:

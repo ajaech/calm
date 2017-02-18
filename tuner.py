@@ -4,40 +4,44 @@ import os
 import random
 
 threads = 10
-data = 'tweets.tsv.gz'
+#data = '/g/ssli/data/LowResourceLM/tweets/train.tsv.gz'
+data = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
 
 def GetRandomSetting():
   """Gets a random parameter setting."""
   model_params = {}
 
-  model_params['context_vars'] = ['lang', 'dataset']
+  
+  model_params['val_data'] = None
+  # '/g/ssli/data/LowResourceLM/tweets/val.tsv.gz'
+  model_params['context_vars'] = ['subreddit']
   model_params['context_embed_sizes'] = random.choice(
-    [[3, 3], [5, 5]])
+    [[6], [8], [12]])
   model_params['context_embed_size'] = random.choice(
-    [5, 9, 15])
-  model_params['dropout_keep_prob'] = random.choice([0.8, 0.9, 1.0])
-  model_params['nce_samples'] = None
-  model_params['batch_size'] = random.choice([15, 30, 60])
+    [7, 13, 20])
+  model_params['dropout_keep_prob'] = random.choice([1.0, 0.9, 0.8])
+  model_params['nce_samples'] = random.choice([100, 200, 300])
+  model_params['batch_size'] = random.choice([30, 40, 50])
 
-  model_params['embedding_dims'] = random.choice([10, 15, 20])
-  model_params['cell_size'] = random.choice([128, 190, 230, 270])
+  model_params['embedding_dims'] = random.choice([100, 130, 150])
+  model_params['cell_size'] = random.choice([240, 260, 290, 310])
 
-  model_params['max_len'] = 200
+  model_params['max_len'] = 35
 
   model_params['use_softmax_adaptation'] = random.choice([True, True, False, False, False])
   model_params['use_mikolov_adaptation'] = random.choice([True, True, False, False, False])
   model_params['use_hyper_adaptation'] = random.choice([True, True, False, False, False])
 
   model_params['learning_rate'] = 0.001
-  model_params['iters'] = random.choice([60000, 80000, 100000, 120000])
-  model_params['splitter'] = 'char'
+  model_params['iters'] = random.choice([60000, 80000, 100000, 110000])
+  model_params['splitter'] = 'word'
 
   return model_params
 
 
-cmd = './rnnlm.py exps/dual{0} --params={1} --threads={2} --data={3} 2> exps/dual{0}.error.log'
+cmd = './rnnlm.py exps/reddit{0} --params={1} --threads={2} --data={3} 2> exps/reddit{0}.error.log'
 
-for i in xrange(30):
+for i in xrange(40, 80):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:

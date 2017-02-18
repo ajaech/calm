@@ -1,14 +1,17 @@
 {
+    "val_data": "/n/falcon/s0/ajaech/reddit.tsv.bz2",
+    "context_vars": ["subreddit"],
+    "context_embed_sizes": [12],
+    "context_embed_size": 12,
     "iters": 100000,
     "nce_samples": 200,
     "batch_size": 100,
     "learning_rate": 0.001,
     "embedding_dims": 40,
-    "cell_size": 64,
-    "user_embedding_size": 40,
+    "cell_size": 128,
     "max_len": 35,
     "dropout_keep_prob": 0.9,
-    "use_softmax_adaptation": false,
+    "use_softmax_adaptation": true,
     "use_mikolov_adaptation": false,
     "use_hyper_adaptation": false
 }

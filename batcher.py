@@ -61,10 +61,13 @@ class Dataset(object):
 
     SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
     data['text'] = data['text'].apply(SplitFunc)
-    
+
     self.valdata = None
     if mode == 'all':
       self.data = data
+      self.valdata = ReadData('/g/ssli/data/LowResourceLM/tweets/val.tsv.gz',
+                              columns, limit)
+      self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
     else:
       train_data = data[(data.index.values - 1) % 10 > 1]
       eval_data = data[(data.index.values - 1) % 10 <= 1]
@@ -102,8 +105,9 @@ class Dataset(object):
     df['text'] = df['text'].apply(
       lambda x: self.GetNumberLine(x, word_vocab, self._max_len))
     for context_var in context_vocabs:
+      vocab = context_vocabs[context_var]
       df[context_var] = df[context_var].apply(
-        lambda x: context_vocabs[context_var][x])
+        lambda x: vocab[x])
 
   def GetNumBatches(self):
     """Returns num batches per epoch."""

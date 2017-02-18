@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 import tensorflow as tf
+import nn_impl
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 
@@ -133,7 +134,7 @@ class BaseModel(object):
       self.context_embeddings = {}
       for i in range(self.num_context_vars):
         self.context_placeholders[params.context_vars[i]] = tf.placeholder(
-          tf.int64, [None], name='context_var{0}'.format(i))
+          tf.int32, [None], name='context_var{0}'.format(i))
         self.context_embeddings[params.context_vars[i]] = tf.get_variable(
           'context_embedding{0}'.format(i), 
           [context_vocab_sizes[i], params.context_embed_sizes[i]])
@@ -141,7 +142,8 @@ class BaseModel(object):
       context_embeds = []
       for context_var in params.context_vars:
         context_embeds.append(tf.nn.embedding_lookup(
-          self.context_embeddings[context_var], self.context_placeholders[context_var]))
+          self.context_embeddings[context_var],
+          self.context_placeholders[context_var]))
 
       if len(context_embeds) == 1:
         self.final_context_embed = context_embeds[0]
@@ -166,7 +168,6 @@ class BaseModel(object):
         'softmax_adapter', [self.final_context_embed.get_shape()[1], self.vocab_size])
       self.adapted_bias = tf.reduce_sum(tf.matmul(
         self.final_context_embed, self.softmax_adapter), 0)
-      self.base_bias += self.adapted_bias
 
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
@@ -177,10 +178,11 @@ class BaseModel(object):
 
   def OutputHelper(self, reshaped_outputs, params, use_nce_loss=True):
     if use_nce_loss:
-      proj_out =  tf.reshape(reshaped_outputs, [outputs.get_shape()[0].value,
-                                                outputs.get_shape()[1].value, -1])
+      proj_out =  tf.reshape(reshaped_outputs, [self._mask.get_shape()[0].value,
+                                                self._mask.get_shape()[1].value, -1])
 
-      losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
+      losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples,
+                          softmax_adaptation=params.use_softmax_adaptation)
       masked_loss = tf.mul(losses, self._mask)
     else:
       masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings)
@@ -189,9 +191,16 @@ class BaseModel(object):
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
 
-  def DoNCE(self, weights, out_embeddings, num_sampled=256, user_embeddings=None):
+  def DoNCE(self, weights, out_embeddings, num_sampled=256, softmax_adaptation=False):
     w_list = tf.unpack(weights, axis=1)
     losses = []
+    
+    context_embedding=None
+    adapted_bias = None
+    if softmax_adaptation:
+      context_embedding = self.final_context_embed
+      adapted_bias = self.softmax_adapter
+
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
       sampled_values = tf.nn.fixed_unigram_candidate_sampler(
         true_classes=y,
@@ -201,15 +210,11 @@ class BaseModel(object):
         range_max=self.vocab_size,
         unigrams=self.unigram_probs
       )
-
-      self.a, self.b, self.c = sampled_values
-
-      if user_embeddings is not None:
-        w = tf.concat(1, [user_embeddings, w])
-
-      nce_loss = tf.nn.sampled_softmax_loss(out_embeddings, self.base_bias, 
-                                            w, y, num_sampled, self.vocab_size, 
-                                            sampled_values=sampled_values)        
+      nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias, 
+                                              y, w, num_sampled, self.vocab_size, 
+                                              sampled_values=sampled_values,
+                                              context_embeddings=context_embedding,
+                                              adapted_bias=adapted_bias)  
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
@@ -221,8 +226,11 @@ class BaseModel(object):
     reshaped_mask = tf.reshape(self._mask, [-1])
     reshaped_labels = tf.reshape(self.y, [-1])
 
+    bias = self.base_bias
+    if hasattr(self, 'adapted_bias'):
+      bias += self.adapted_bias
     reshaped_logits = tf.matmul(
-      reshaped_outputs, out_embeddings, transpose_b=True) + self.base_bias
+      reshaped_outputs, out_embeddings, transpose_b=True) + bias
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
@@ -234,21 +242,29 @@ class BaseModel(object):
     return masked_loss
 
   def CreateDecodingGraph(self, cell, params):
+
+    # placeholders for decoder
     self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
     self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
     self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
+    self.temperature = tf.placeholder_with_default([0.7], [1])
+
+    # lookup embedding
     prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
     prev_embed = tf.expand_dims(prev_embed, 0)
-
-    if params.use_softmax_adaptation:
-      prev_embed = prev_embed[:, params.context_embed_size:]
     
+    # one iteration of recurrent layer
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
       result, (self.next_c, self.next_h) = cell(prev_embed, state)
-    logits = tf.matmul(result, self._word_embeddings, transpose_b=True) + self.base_bias
+      proj_result = tf.matmul(result, self.linear_proj)
+
+    # softmax layer
+    bias = self.base_bias
+    if params.use_softmax_adaptation:
+      bias += self.adapted_bias
+    logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
     self.next_idx = tf.argmax(logits, 1)
-    self.temperature = tf.placeholder_with_default([1.0], [1])
     self.next_prob = tf.nn.softmax(logits / self.temperature)
 
 
@@ -278,7 +294,7 @@ class HyperModel(BaseModel):
     projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss)
 
-    #self.CreateDecodingGraph(cell, params)
+    self.CreateDecodingGraph(cell, params)
 
 
 def PrintParams(handle=sys.stdout.write):

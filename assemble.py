@@ -7,7 +7,7 @@ import code
 
 results = []
 
-for dirname in glob.glob('exps/lang*'):
+for dirname in glob.glob('exps/reddit*'):
 
   if os.path.isfile(dirname):
     continue
@@ -38,9 +38,9 @@ for dirname in glob.glob('exps/lang*'):
   if os.path.exists(filename):
     with open(filename, 'r') as f:
       lines = f.readlines()
-      if len(lines):
+      if len(lines) > 3:
         f1 = lines[-1].split()[-1]
-        accuracy = lines[2].split()[-1]
+        accuracy = lines[1].split()[-1]
         params['f1'] = f1
         params['acc'] = accuracy
 
@@ -51,7 +51,10 @@ for dirname in glob.glob('exps/lang*'):
   if os.path.exists(filename):
     print filename
     data = pandas.read_csv(filename)
-    
+   
+    if len(data.uname.unique()) < 2:
+      continue
+ 
     def PPL(df):
       return (df.cost * df.length).sum() / df.length.sum()
 
@@ -59,7 +62,7 @@ for dirname in glob.glob('exps/lang*'):
     ppl = data.groupby('uname').apply(PPL)
 
     summary['ppl'] = ppl.apply(np.exp).values
-    summary = summary[summary.length > 60].sort_values('ppl')
+    summary = summary[summary.length > 200].sort_values('ppl')
 
     summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
 

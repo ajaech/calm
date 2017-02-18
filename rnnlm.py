@@ -87,7 +87,7 @@ if args.mode in ('train', 'eval', 'classify'):
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=splitter)
+                   mode=mode, splitter=splitter, limit=50000)
 
 if args.mode == 'train' and args.initialize is None:
   vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
@@ -211,19 +211,11 @@ def Debug(expdir):
                 for i in range(10)]
     print ' '.join(topwords)
     
-  base_bias = session.run(model.base_bias)
-  Process(base_bias.T, 'Baseline')
-
-  uword = model._word_embeddings[:, :params.context_embed_size]
-  m = model
-  code.interact(local=locals())
-  
-  scores = tf.matmul(uword, tf.expand_dims(model.final_context_embed, 1))
-
-  subnames = ['en', 'es', 'pt', 'de', 'it']
+  #subnames = ['en', 'es', 'pt', 'de', 'it']
+  subnames = ['exmormon', 'askwomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews']
   for subname in subnames:
-    s = session.run(scores, {model.context_placeholders['lang']:
-                             context_vocabs['lang'][subname]})
+    s = session.run(model.adapted_bias, {model.context_placeholders['subreddit']:
+                                         np.expand_dims(context_vocabs['subreddit'][subname], 0)})
     Process(s, subname)
 
 
@@ -248,11 +240,10 @@ class BeamItem(object):
 def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  varname = 'lang'
-  subname = 'en'
+  varname = 'subreddit'
+  subname = 'nfl'
 
   beam_size = 12
-  current_word = '<S>'
   prevstate_h = np.zeros((1, params.cell_size))
   prevstate_c = np.zeros((1, params.cell_size))
   beam_items = []
@@ -260,7 +251,7 @@ def BeamSearch(expdir):
   # initalize beam
   beam_items.append(BeamItem('<S>', prevstate_h, prevstate_c))
 
-  for i in xrange(30):
+  for i in xrange(20):
     new_beam_items = []
     for beam_item in beam_items:
       feed_dict = {
@@ -281,11 +272,15 @@ def BeamSearch(expdir):
       top_values = current_prob[0, top_entries]
       for top_entry, top_value in zip(top_entries, top_values):
         new_beam = copy.deepcopy(beam_item)
-        new_beam.Update(-np.log(top_value), vocab[top_entry], prevstate_c, prevstate_h)
-        new_beam_items.append(new_beam)
+        new_word = vocab[top_entry]
+        if new_word != '<UNK>':
+          new_beam.Update(-np.log(top_value), vocab[top_entry], prevstate_c, prevstate_h)
+          new_beam_items.append(new_beam)
       new_beam_items = sorted(new_beam_items, key=lambda x: x.Cost())
-      beam_items = new_beam_items[:5]
-  code.interact(local=locals())
+      beam_items = new_beam_items[:beam_size]
+  for item in beam_items:
+    print ' '.join(item.words)
+
 
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
@@ -297,7 +292,7 @@ def Greedy(expdir):
 
     words = []
     log_probs = []
-    for i in xrange(50):
+    for i in xrange(15):
       feed_dict = {                      
         model.prev_word: vocab[current_word],
         model.prev_c: prevstate_c,
@@ -324,12 +319,12 @@ def Greedy(expdir):
     
   sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
                  'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'hockey']
-  sample_list = ['en', 'fr', 'pt', 'es', 'eu']
+  #sample_list = ['en', 'fr', 'pt', 'es', 'eu']
 
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
     for _ in range(5):
-      ppl, sentence = Process('lang', n)
+      ppl, sentence = Process('subreddit', n)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
@@ -394,12 +389,12 @@ def Eval(expdir):
 
     lens = feed_dict[model.seq_len]
     if hasattr(model, 'context_placeholders'):
-      unames = feed_dict[model.context_placeholders['lang']]
+      unames = feed_dict[model.context_placeholders['subreddit']]
     else: 
       unames = ['None'] * len(lens)
 
     for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
-      results.append({'length': length, 'uname': context_vocabs['lang'][uname],
+      results.append({'length': length, 'uname': context_vocabs['subreddit'][uname],
                       'cost': sentence_cost})
 
     seq_len = feed_dict[model.seq_len]
@@ -422,8 +417,9 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  Debug(args.expdir)
-  #BeamSearch(args.expdir)
+  #Debug(args.expdir)
+  #Greedy(args.expdir)
+  BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
