@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+`#!/usr/bin/env python
 import argparse
 import bunch
 import collections
@@ -244,12 +244,13 @@ def BeamSearch(expdir):
   subname = 'nfl'
 
   beam_size = 12
-  prevstate_h = np.zeros((1, params.cell_size))
-  prevstate_c = np.zeros((1, params.cell_size))
   beam_items = []
 
   # initalize beam
-  beam_items.append(BeamItem('<S>', prevstate_h, prevstate_c))
+  beam_items.append(
+    BeamItem('<S>', 
+             np.zeros((1, params.cell_size)), 
+             np.zeros((1, params.cell_size))))
 
   for i in xrange(20):
     new_beam_items = []
@@ -279,7 +280,7 @@ def BeamSearch(expdir):
       new_beam_items = sorted(new_beam_items, key=lambda x: x.Cost())
       beam_items = new_beam_items[:beam_size]
   for item in beam_items:
-    print ' '.join(item.words)
+    print item.Cost(), ' '.join(item.words)
 
 
 def Greedy(expdir):
@@ -318,7 +319,7 @@ def Greedy(expdir):
     return ppl, SEPERATOR.join(words)
     
   sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
-                 'GoneWild', 'tifu', 'WTF', 'AskHistorians', 'hockey']
+                 'tifu', 'WTF', 'AskHistorians', 'hockey']
   #sample_list = ['en', 'fr', 'pt', 'es', 'eu']
 
   for n in sample_list:

@@ -7,6 +7,7 @@ from tensorflow.python.ops import rnn_cell
 
 import code
 
+
 def _linear(args, output_size, bias, bias_start=0.0, scope=None):
   """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
   Args:
@@ -290,6 +291,7 @@ class HyperModel(BaseModel):
       'linear_proj', [params.cell_size, params.embedding_dims])
     outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
+    self.outputs = outputs
     reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
     projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss)
