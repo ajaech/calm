@@ -189,6 +189,10 @@ class BaseModel(object):
       masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings)
       self.masked_loss = masked_loss
 
+    self.per_word_loss = tf.reshape(masked_loss, [-1, self.max_length])
+    per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
+    self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
+
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
 
@@ -235,10 +239,6 @@ class BaseModel(object):
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
-
-    self.per_word_loss = tf.reshape(masked_loss, [-1, self.max_length])
-    per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
-    self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
 
     return masked_loss
 

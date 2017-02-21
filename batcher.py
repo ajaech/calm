@@ -17,11 +17,11 @@ def GetFileHandle(filename):
 
 def WordSplitter(text):
   text = text.replace('\n', ' ')
-  return text.lower().split()
+  return ['<S>'] + text.lower().split() + ['</S>']
 
 
 def CharSplitter(text):
-  return list(text.strip())
+  return ['<S>'] + list(text.strip()) + ['</S>']
 
 
 def NgramSplitter(text):
@@ -76,6 +76,7 @@ class Dataset(object):
         self.valdata = eval_data.reset_index(drop=True)
       elif mode == 'eval':
         self.data = eval_data.reset_index(drop=True)
+    print 'loaded {0} sentences'.format(len(self.data))
 
   def GetSentences(self):
     return self.data['text']
@@ -85,7 +86,7 @@ class Dataset(object):
     """Convert list of words to matrix of word ids."""
     ids = [vocab[w] for w in line[:pad_length]]
     if len(ids) < pad_length:
-      ids += [vocab['}']] * (pad_length - len(ids))
+      ids += [vocab['</S>']] * (pad_length - len(ids))
     return np.array(ids)
 
   def Prepare(self, word_vocab, context_vocabs):

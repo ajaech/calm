@@ -1,4 +1,4 @@
-`#!/usr/bin/env python
+#!/usr/bin/env python
 import argparse
 import bunch
 import collections
@@ -87,7 +87,7 @@ if args.mode in ('train', 'eval', 'classify'):
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=splitter, limit=50000)
+                   mode=mode, splitter=splitter)
 
 if args.mode == 'train' and args.initialize is None:
   vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
@@ -112,6 +112,9 @@ unigram_probs = vocab.GetUnigramProbs()
 use_nce_loss = args.mode == 'train'
 if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
+if args.mode == 'eval':
+  use_nce_loss = True
+  params.nce_samples = 800
 model = HyperModel(
   params, unigram_probs,
   [len(context_vocabs[v]) for v in params.context_vars], 
@@ -185,15 +188,9 @@ def DumpEmbeddings(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   word = model._word_embeddings.eval(session=session)
-  user = model._user_embeddings.eval(session=session)
 
   with gzip.open(os.path.join(expdir, 'embeddings.tsv.gz'), 'w') as f:
     for w in word:
-      f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
-      f.write('\n')
-
-  with gzip.open(os.path.join(expdir, 'userembeddings.tsv.gz'), 'w') as f:
-    for w in user:
       f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
       f.write('\n')
 
@@ -252,7 +249,7 @@ def BeamSearch(expdir):
              np.zeros((1, params.cell_size)), 
              np.zeros((1, params.cell_size))))
 
-  for i in xrange(20):
+  for i in xrange(6):
     new_beam_items = []
     for beam_item in beam_items:
       feed_dict = {
@@ -260,12 +257,13 @@ def BeamSearch(expdir):
         model.prev_c: beam_item.prev_c,
         model.prev_h: beam_item.prev_h
       }
-      for context_var in params.context_vars:
-        placeholder = model.context_placeholders[context_var]
-        if context_var == varname:
-          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
-        else:
-          feed_dict[placeholder] = np.array([0])
+      if hasattr(model, 'context_placeholders'):
+        for context_var in params.context_vars:
+          placeholder = model.context_placeholders[context_var]
+          if context_var == varname:
+            feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+          else:
+            feed_dict[placeholder] = np.array([0])
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_h, prevstate_c = a
@@ -299,12 +297,13 @@ def Greedy(expdir):
         model.prev_c: prevstate_c,
         model.prev_h: prevstate_h,
       }
-      for context_var in params.context_vars:
-        placeholder = model.context_placeholders[context_var]
-        if context_var == varname:
-          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
-        else:
-          feed_dict[placeholder] = np.array([1])
+      if hasattr(model, 'context_placeholders'):
+        for context_var in params.context_vars:
+          placeholder = model.context_placeholders[context_var]
+          if context_var == varname:
+            feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+          else:
+            feed_dict[placeholder] = np.array([1])
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_h, prevstate_c = a
@@ -374,6 +373,7 @@ def Classify(expdir):
 
 def Eval(expdir):
   dataset.Prepare(vocab, context_vocabs)
+  num_batches = dataset.GetNumBatches()
 
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
@@ -381,12 +381,13 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(dataset.GetNumBatches()):
+  for pos in xrange(min(dataset.GetNumBatches(), 3000)):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch)
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
+
 
     lens = feed_dict[model.seq_len]
     if hasattr(model, 'context_placeholders'):
@@ -419,7 +420,7 @@ if args.mode == 'classify':
 
 if args.mode == 'debug':
   #Debug(args.expdir)
-  #Greedy(args.expdir)
+  # Greedy(args.expdir)
   BeamSearch(args.expdir)
 
 if args.mode == 'dump':
