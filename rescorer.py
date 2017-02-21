@@ -45,6 +45,7 @@ saver.restore(session, os.path.join(args.expdir, 'model.bin'))
 
 for _ in range(10):
   sentence = raw_input("Please enter something: ")
+  sentence = sentence.lower()
   words = ['<S>'] + sentence.split() + ['</S>']
   seq_len = len(words)
   if seq_len < params.max_len:
@@ -60,4 +61,4 @@ for _ in range(10):
   }
 
   r = session.run(model.per_sentence_loss, feed_dict)
-  print r
+  print r * (seq_len - 1)
