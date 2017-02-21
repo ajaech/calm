@@ -113,7 +113,7 @@ use_nce_loss = args.mode == 'train'
 if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
 if args.mode == 'eval':
-  use_nce_loss = True
+  use_nce_loss = False
   params.nce_samples = 800
 model = HyperModel(
   params, unigram_probs,
@@ -238,9 +238,9 @@ def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   varname = 'subreddit'
-  subname = 'nfl'
+  subname = 'AskReddit'
 
-  beam_size = 12
+  beam_size = 30
   beam_items = []
 
   # initalize beam
@@ -249,9 +249,13 @@ def BeamSearch(expdir):
              np.zeros((1, params.cell_size)), 
              np.zeros((1, params.cell_size))))
 
-  for i in xrange(6):
+  for i in xrange(12):
     new_beam_items = []
     for beam_item in beam_items:
+      if beam_item.words[-1] == '</S>':  # don't extend past end-of-sentence token
+        new_beam_items.append(beam_item)
+        continue
+
       feed_dict = {
         model.prev_word: vocab[beam_item.words[-1]],
         model.prev_c: beam_item.prev_c,
@@ -267,8 +271,18 @@ def BeamSearch(expdir):
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_h, prevstate_c = a
-      top_entries = np.argsort(current_prob)[0, -beam_size:]
-      top_values = current_prob[0, top_entries]
+
+      top_entries = []
+      top_values = []
+      cumulative = np.cumsum(current_prob)
+      while len(top_entries) < beam_size:
+        current_word_id = np.argmin(cumulative < np.random.rand())
+        if current_word_id not in top_entries:
+          top_entries.append(current_word_id)
+          top_values.append(current_prob[0, current_word_id])
+
+      #top_entries = np.argsort(current_prob)[0, -beam_size:]
+      #top_values = current_prob[0, top_entries]
       for top_entry, top_value in zip(top_entries, top_values):
         new_beam = copy.deepcopy(beam_item)
         new_word = vocab[top_entry]
@@ -328,11 +342,6 @@ def Greedy(expdir):
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
-def GetText(s, seq_len):
-  ws = [vocab[s[0, i]] for i in range(seq_len)]
-  return ' '.join(ws)
-
-
 def Classify(expdir):
   dataset.Prepare(vocab, context_vocabs)
 
@@ -381,13 +390,12 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 3000)):
+  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch)
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
-
 
     lens = feed_dict[model.seq_len]
     if hasattr(model, 'context_placeholders'):
@@ -399,9 +407,9 @@ def Eval(expdir):
       results.append({'length': length, 'uname': context_vocabs['subreddit'][uname],
                       'cost': sentence_cost})
 
-    seq_len = feed_dict[model.seq_len]
-    total_word_count += sum(seq_len)
-    total_log_prob += float(cost * sum(seq_len))
+    words_in_batch = sum(feed_dict[model.seq_len] - 1)
+    total_word_count += words_in_batch
+    total_log_prob += float(cost * words_in_batch)
     ppl = np.exp(total_log_prob / total_word_count)
     print '{0}\t{1:.3f}'.format(pos, ppl)
   
@@ -420,7 +428,7 @@ if args.mode == 'classify':
 
 if args.mode == 'debug':
   #Debug(args.expdir)
-  # Greedy(args.expdir)
+  #Greedy(args.expdir)
   BeamSearch(args.expdir)
 
 if args.mode == 'dump':
