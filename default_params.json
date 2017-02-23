@@ -1,17 +1,1 @@
-{
-    "val_data": "/n/falcon/s0/ajaech/reddit.tsv.bz2",
-    "context_vars": ["subreddit"],
-    "context_embed_sizes": [12],
-    "context_embed_size": 12,
-    "iters": 100000,
-    "nce_samples": 200,
-    "batch_size": 100,
-    "learning_rate": 0.001,
-    "embedding_dims": 40,
-    "cell_size": 128,
-    "max_len": 35,
-    "dropout_keep_prob": 0.9,
-    "use_softmax_adaptation": true,
-    "use_mikolov_adaptation": false,
-    "use_hyper_adaptation": false
-}
+{"val_data": null, "cell_size": 300, "context_embed_size": 7, "nce_samples": 250, "use_mikolov_adaptation": true, "iters": 115000, "dropout_keep_prob": 1.0, "batch_size": 35, "learning_rate": 0.001, "max_len": 35, "use_hyper_adaptation": true, "use_softmax_adaptation": true, "splitter": "word", "context_vars": ["subreddit"], "context_embed_sizes": [12], "embedding_dims": 110}

@@ -180,7 +180,7 @@ def Train(expdir):
       logging.info({'iter': idx, 'cost': avgcost.Update(cost),
                     'rawcost': cost, 'valcost': val_cost})
 
-      if idx % 1000 == 0:
+      if idx % 100 == 0:
         saver.save(session, os.path.join(expdir, 'model.bin'))
 
 
@@ -199,6 +199,10 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   PrintParams()
 
+  uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
+  subreddit = tf.placeholder(tf.int32, ())
+  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
+
   def Process(s, subname):
     s = np.squeeze(s.T)
     vals = s.argsort()
@@ -209,10 +213,10 @@ def Debug(expdir):
     print ' '.join(topwords)
     
   #subnames = ['en', 'es', 'pt', 'de', 'it']
-  subnames = ['exmormon', 'askwomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews']
+  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming']
   for subname in subnames:
-    s = session.run(model.adapted_bias, {model.context_placeholders['subreddit']:
-                                         np.expand_dims(context_vocabs['subreddit'][subname], 0)})
+    s = session.run(scores, {subreddit: context_vocabs['subreddit'][subname]})
     Process(s, subname)
 
 
@@ -238,7 +242,7 @@ def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   varname = 'subreddit'
-  subname = 'AskReddit'
+  subname = 'worldnews'
 
   beam_size = 30
   beam_items = []
@@ -390,7 +394,7 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
+  for pos in xrange(min(dataset.GetNumBatches(), 600)):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch)
 
@@ -427,9 +431,9 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  #Debug(args.expdir)
-  #Greedy(args.expdir)
-  BeamSearch(args.expdir)
+  Debug(args.expdir)
+  Greedy(args.expdir)
+  #BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

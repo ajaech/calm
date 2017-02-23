@@ -1,7 +1,6 @@
 import sys
 import numpy as np
 import tensorflow as tf
-import nn_impl
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 
@@ -156,19 +155,21 @@ class BaseModel(object):
         context_bias = tf.get_variable('context_bias', [params.context_embed_size])
         
         self.final_context_embed = tf.nn.tanh(tf.matmul(context_embeds, context_mlp) + 
-                                              context_bias)      
-    self._word_embeddings = tf.get_variable(
-      'word_embeddings', [self.vocab_size, self._embedding_dims])
+                                              context_bias)
 
+    if params.use_softmax_adaptation:
+      self._word_embeddings = tf.get_variable(
+        'word_embeddings', [self.vocab_size, self._embedding_dims + params.context_embed_sizes[0]])
+    else:
+      self._word_embeddings = tf.get_variable(
+        'word_embeddings', [self.vocab_size, self._embedding_dims])
+      
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
 
-    self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
-    # optionally concatenate the context embeddings to the outputs
     if params.use_softmax_adaptation:
-      self.softmax_adapter = tf.get_variable(
-        'softmax_adapter', [self.final_context_embed.get_shape()[1], self.vocab_size])
-      self.adapted_bias = tf.reduce_sum(tf.matmul(
-        self.final_context_embed, self.softmax_adapter), 0)
+      self._inputs = self._inputs[:, :, params.context_embed_size:]
+
+    self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
 
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
@@ -182,10 +183,22 @@ class BaseModel(object):
       proj_out =  tf.reshape(reshaped_outputs, [self._mask.get_shape()[0].value,
                                                 self._mask.get_shape()[1].value, -1])
 
+      # add in the context embeddings
+      if params.use_softmax_adaptation:
+        packed_context_embed = tf.pack([self.final_context_embed] * params.max_len, 1)
+        proj_out = tf.concat(2, [packed_context_embed, proj_out])
+
       losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples,
                           softmax_adaptation=params.use_softmax_adaptation)
       masked_loss = tf.mul(losses, self._mask)
     else:
+
+      # add in the context embeddings
+      if params.use_softmax_adaptation:
+        packed_context_embed = tf.pack([self.final_context_embed] * params.max_len, 1)
+        reshaped_context = tf.reshape(packed_context_embed, [tf.shape(reshaped_outputs)[0], -1])
+        reshaped_outputs = tf.concat(1, [reshaped_context, reshaped_outputs])
+
       masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings)
       self.masked_loss = masked_loss
 
@@ -200,12 +213,6 @@ class BaseModel(object):
     w_list = tf.unpack(weights, axis=1)
     losses = []
     
-    context_embedding=None
-    adapted_bias = None
-    if softmax_adaptation:
-      context_embedding = self.final_context_embed
-      adapted_bias = self.softmax_adapter
-
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
       sampled_values = tf.nn.fixed_unigram_candidate_sampler(
         true_classes=y,
@@ -215,11 +222,10 @@ class BaseModel(object):
         range_max=self.vocab_size,
         unigrams=self.unigram_probs
       )
-      nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias, 
-                                              y, w, num_sampled, self.vocab_size, 
-                                              sampled_values=sampled_values,
-                                              context_embeddings=context_embedding,
-                                              adapted_bias=adapted_bias)  
+      nce_loss = tf.nn.sampled_softmax_loss(out_embeddings, self.base_bias, 
+                                            w, y, num_sampled, self.vocab_size, 
+                                            sampled_values=sampled_values)
+                                          
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
@@ -248,22 +254,26 @@ class BaseModel(object):
     self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
     self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
     self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
-    self.temperature = tf.placeholder_with_default([0.7], [1])
+    self.temperature = tf.placeholder_with_default([0.6], [1])
 
     # lookup embedding
     prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
     prev_embed = tf.expand_dims(prev_embed, 0)
     
+    if params.use_softmax_adaptation:
+      prev_embed = prev_embed[:, params.context_embed_size:]
+
     # one iteration of recurrent layer
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
       result, (self.next_c, self.next_h) = cell(prev_embed, state)
       proj_result = tf.matmul(result, self.linear_proj)
+      
+    if params.use_softmax_adaptation:
+      proj_result = tf.concat(1, [self.final_context_embed, proj_result])
 
     # softmax layer
     bias = self.base_bias
-    if params.use_softmax_adaptation:
-      bias += self.adapted_bias
     logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
     self.next_idx = tf.argmax(logits, 1)
     self.next_prob = tf.nn.softmax(logits / self.temperature)

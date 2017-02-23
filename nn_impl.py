@@ -21,6 +21,7 @@ from __future__ import print_function
 import code
 import math
 
+import tensorflow as tf
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
@@ -142,11 +143,23 @@ def _compute_sampled_logits(weights,
         weights, all_ids, partition_strategy=partition_strategy)
     all_b = embedding_ops.embedding_lookup(biases, all_ids)
 
+    true_adapt = None
+    sampled_adapt = None
     if context_embeddings is not None:
-      adapted = embedding_ops.embedding_lookup(
-        array_ops.transpose(adapted_bias), all_ids)
-      prod = math_ops.matmul(context_embeddings, adapted, transpose_b=True)
-      all_b += math_ops.reduce_sum(prod, 0)
+      adapted_bias_t = array_ops.transpose(adapted_bias)
+      # context_embeddings is [batch_size x context_embed_size]
+      true_adapt_embed = embedding_ops.embedding_lookup(
+        adapted_bias_t, labels_flat)
+      sampled_adapt_embed = embedding_ops.embedding_lookup(
+        adapted_bias_t, sampled)
+      # prod is [batch_size * num_ids]
+      true_adapt = tf.matmul(context_embeddings, true_adapt_embed, 
+                             transpose_b=True)
+      sampled_adapt = tf.matmul(context_embeddings, sampled_adapt_embed,
+                                transpose_b=True)
+      vals = [tf.reduce_min(true_adapt), tf.reduce_max(true_adapt),
+              tf.reduce_min(sampled_adapt), tf.reduce_max(sampled_adapt)]
+      sampled_adapt = tf.Print(sampled_adapt, vals)
 
     # true_w shape is [batch_size * num_true, dim]
     # true_b is a [batch_size * num_true] tensor
@@ -164,11 +177,13 @@ def _compute_sampled_logits(weights,
         array_ops.reshape(true_w, new_true_w_shape))
     # We want the row-wise dot plus biases which yields a
     # [batch_size, num_true] tensor of true_logits.
-    dots_as_matrix = array_ops.reshape(row_wise_dots,
-                                       array_ops.concat(0, [[-1], dim]))
-    true_logits = array_ops.reshape(_sum_rows(dots_as_matrix), [-1, num_true])
-    true_b = array_ops.reshape(true_b, [-1, num_true])
+    dots_as_matrix = tf.reshape(row_wise_dots,
+                                array_ops.concat(0, [[-1], dim]))
+    true_logits = tf.reshape(_sum_rows(dots_as_matrix), [-1, num_true])
+    true_b = tf.reshape(true_b, [-1, num_true])
     true_logits += true_b
+    if true_adapt is not None:
+      true_logits += tf.expand_dims(tf.reduce_sum(true_adapt, 1), 1)
 
     # Lookup weights and biases for sampled labels.
     #   sampled_w shape is [num_sampled, dim]
@@ -183,6 +198,8 @@ def _compute_sampled_logits(weights,
     # Apply X*W'+B, which yields [batch_size, num_sampled]
     sampled_logits = math_ops.matmul(
         inputs, sampled_w, transpose_b=True) + sampled_b
+    if sampled_adapt is not None:
+      sampled_logits += sampled_adapt
 
     if remove_accidental_hits:
       acc_hits = candidate_sampling_ops.compute_accidental_hits(

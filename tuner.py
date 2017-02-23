@@ -19,12 +19,12 @@ def GetRandomSetting():
     [[6], [8], [12]])
   model_params['context_embed_size'] = random.choice(
     [7, 13, 20])
-  model_params['dropout_keep_prob'] = random.choice([1.0, 0.9, 0.8])
-  model_params['nce_samples'] = random.choice([100, 200, 300])
-  model_params['batch_size'] = random.choice([30, 40, 50])
+  model_params['dropout_keep_prob'] = random.choice([1.0])
+  model_params['nce_samples'] = random.choice([70, 130, 145])
+  model_params['batch_size'] = random.choice([42, 55, 70])
 
-  model_params['embedding_dims'] = random.choice([100, 130, 150])
-  model_params['cell_size'] = random.choice([240, 260, 290, 310])
+  model_params['embedding_dims'] = random.choice([125, 135, 145])
+  model_params['cell_size'] = random.choice([290, 310, 325])
 
   model_params['max_len'] = 35
 
@@ -33,7 +33,7 @@ def GetRandomSetting():
   model_params['use_hyper_adaptation'] = random.choice([True, True, False, False, False])
 
   model_params['learning_rate'] = 0.001
-  model_params['iters'] = random.choice([60000, 80000, 100000, 110000])
+  model_params['iters'] = random.choice([125000, 135000, 150000])
   model_params['splitter'] = 'word'
 
   return model_params
@@ -41,7 +41,7 @@ def GetRandomSetting():
 
 cmd = './rnnlm.py exps/reddit{0} --params={1} --threads={2} --data={3} 2> exps/reddit{0}.error.log'
 
-for i in xrange(40, 80):
+for i in xrange(12):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:
