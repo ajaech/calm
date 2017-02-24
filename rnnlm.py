@@ -244,7 +244,7 @@ def BeamSearch(expdir):
   varname = 'subreddit'
   subname = 'worldnews'
 
-  beam_size = 30
+  beam_size = 10
   beam_items = []
 
   # initalize beam
@@ -274,7 +274,8 @@ def BeamSearch(expdir):
             feed_dict[placeholder] = np.array([0])
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
-      current_prob, prevstate_h, prevstate_c = a
+      current_prob, prevstate_c, prevstate_h = a
+
 
       top_entries = []
       top_values = []
@@ -284,9 +285,10 @@ def BeamSearch(expdir):
         if current_word_id not in top_entries:
           top_entries.append(current_word_id)
           top_values.append(current_prob[0, current_word_id])
-
-      #top_entries = np.argsort(current_prob)[0, -beam_size:]
-      #top_values = current_prob[0, top_entries]
+      """
+      top_entries = np.argsort(current_prob)[0, -beam_size:]
+      top_values = current_prob[0, top_entries]
+      """
       for top_entry, top_value in zip(top_entries, top_values):
         new_beam = copy.deepcopy(beam_item)
         new_word = vocab[top_entry]
@@ -302,7 +304,7 @@ def BeamSearch(expdir):
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(varname, subname):
+  def Process(varname, subname, greedy=False):
     current_word = '<S>'
     prevstate_h = np.zeros((1, params.cell_size))
     prevstate_c = np.zeros((1, params.cell_size))
@@ -324,25 +326,30 @@ def Greedy(expdir):
             feed_dict[placeholder] = np.array([1])
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
-      current_prob, prevstate_h, prevstate_c = a
-      cumulative = np.cumsum(current_prob)
-      current_word_id = np.argmin(cumulative < np.random.rand())
-      log_probs.append(-np.log(current_prob[0, current_word_id]))
-      current_word = vocab[current_word_id]
-      words.append(current_word)
+      current_prob, prevstate_c, prevstate_h = a
+      if greedy:
+        current_word_id = np.argmax(current_prob)
+        log_probs.append(-np.log(current_prob.max()))
+        current_word = vocab[current_word_id]
+        words.append(current_word)
+      else:
+        cumulative = np.cumsum(current_prob)
+        current_word_id = np.argmin(cumulative < np.random.rand())
+        log_probs.append(-np.log(current_prob[0, current_word_id]))
+        current_word = vocab[current_word_id]
+        words.append(current_word)
       if '</S>' in current_word:
         break
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
   sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
-                 'tifu', 'WTF', 'AskHistorians', 'hockey']
-  #sample_list = ['en', 'fr', 'pt', 'es', 'eu']
+                 'tifu', 'WTF', 'AskHistorians', 'hockey', 'AskReddit']
 
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for _ in range(5):
-      ppl, sentence = Process('subreddit', n)
+    for idx in range(5):
+      ppl, sentence = Process('subreddit', n, greedy=idx==0)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
@@ -394,7 +401,7 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 600)):
+  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch)
 
@@ -402,10 +409,7 @@ def Eval(expdir):
                                        feed_dict)
 
     lens = feed_dict[model.seq_len]
-    if hasattr(model, 'context_placeholders'):
-      unames = feed_dict[model.context_placeholders['subreddit']]
-    else: 
-      unames = ['None'] * len(lens)
+    unames = batch.subreddit
 
     for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
       results.append({'length': length, 'uname': context_vocabs['subreddit'][uname],
