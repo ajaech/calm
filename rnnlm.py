@@ -15,7 +15,7 @@ import sys
 import tensorflow as tf
 import time
 
-from model import HyperModel, PrintParams
+from model import HyperModel
 from vocab import Vocab
 from batcher import Dataset
 import metrics
@@ -86,6 +86,7 @@ if args.mode in ('train', 'eval', 'classify'):
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
+  print 'reading data'
   dataset.ReadData(args.data, params.context_vars + ['text'],
                    mode=mode, splitter=splitter)
 
@@ -197,7 +198,7 @@ def DumpEmbeddings(expdir):
 
 def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
-  PrintParams()
+  metrics.PrintParams()
 
   uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
   subreddit = tf.placeholder(tf.int32, ())

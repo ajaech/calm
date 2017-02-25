@@ -5,6 +5,10 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 
 import code
+import nn_impl
+
+
+np.random.seed(666)
 
 
 def _linear(args, output_size, bias, bias_start=0.0, scope=None):
@@ -178,7 +182,7 @@ class BaseModel(object):
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
-  def OutputHelper(self, reshaped_outputs, params, use_nce_loss=True):
+  def OutputHelper(self, reshaped_outputs, params, use_nce_loss=True, hash_func=None):
     if use_nce_loss:
       proj_out =  tf.reshape(reshaped_outputs, [self._mask.get_shape()[0].value,
                                                 self._mask.get_shape()[1].value, -1])
@@ -188,31 +192,58 @@ class BaseModel(object):
         packed_context_embed = tf.pack([self.final_context_embed] * params.max_len, 1)
         proj_out = tf.concat(2, [packed_context_embed, proj_out])
 
-      losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples,
-                          softmax_adaptation=params.use_softmax_adaptation)
+      if hash_func is None:
+        losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
+      else:
+        losses = self.AltNCE(proj_out, self._word_embeddings, params.nce_samples, hash_func)
+                         
       masked_loss = tf.mul(losses, self._mask)
     else:
-
       # add in the context embeddings
       if params.use_softmax_adaptation:
         packed_context_embed = tf.pack([self.final_context_embed] * params.max_len, 1)
         reshaped_context = tf.reshape(packed_context_embed, [tf.shape(reshaped_outputs)[0], -1])
         reshaped_outputs = tf.concat(1, [reshaped_context, reshaped_outputs])
 
-      masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings)
+      masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings,
+                                     hash_func=hash_func)
       self.masked_loss = masked_loss
 
     self.per_word_loss = tf.reshape(masked_loss, [-1, self.max_length])
     per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
-    self.per_sentence_loss = tf.div(per_sentence_loss, tf.reduce_sum(self._mask, 1))
+    self.per_sentence_loss = tf.div(per_sentence_loss, 
+                                    tf.reduce_sum(self._mask, 1))
 
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
 
-  def DoNCE(self, weights, out_embeddings, num_sampled=256, softmax_adaptation=False):
-    w_list = tf.unpack(weights, axis=1)
+  def AltNCE(self, weights, out_embeddings, num_sampled, hash_func):
     losses = []
-    
+    w_unpack = tf.unpack(weights, axis=0)
+    y_unpack = tf.unpack(self.y, axis=0)
+    context_var = self.context_placeholders['subreddit']
+    for idx, (w, y) in enumerate(zip(w_unpack, y_unpack)):
+      c_val = context_var[idx]
+      y_expanded = tf.expand_dims(y, 1)
+      sampled_values = tf.nn.fixed_unigram_candidate_sampler(
+        true_classes=y_expanded,
+        num_true=1,
+        num_sampled=num_sampled,
+        unique=True,
+        range_max=self.vocab_size,
+        unigrams=self.unigram_probs)
+      
+      h_func = lambda(x): hash_func(x, c_val)
+
+      nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias,
+                                              y_expanded, w, num_sampled, self.vocab_size,
+                                              sampled_values=sampled_values,
+                                              hash_func=h_func)
+      losses.append(nce_loss)
+    return tf.pack(losses, 0)
+
+  def DoNCE(self, weights, out_embeddings, num_sampled=256):
+    losses = []
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
       sampled_values = tf.nn.fixed_unigram_candidate_sampler(
         true_classes=y,
@@ -229,7 +260,8 @@ class BaseModel(object):
       losses.append(nce_loss)
     return tf.pack(losses, 1)
 
-  def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None):
+  def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None,
+                  hash_func=None):
     if user_embeddings is not None:
       replicated = tf.concat(0, [user_embeddings for _ in range(35)])
       reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
@@ -242,6 +274,18 @@ class BaseModel(object):
       bias += self.adapted_bias
     reshaped_logits = tf.matmul(
       reshaped_outputs, out_embeddings, transpose_b=True) + bias
+
+    if hash_func is not None:
+      all_ids = tf.range(0, self.vocab_size)
+      hash_vals = []
+      for idx in range(self.x.get_shape()[0]):  # loop over batch_size
+        s_id = self.context_placeholders['subreddit'][idx]
+        hash_vals.append(hash_func(all_ids, s_id))
+      hash_vals = tf.pack(hash_vals)
+      expanded_hash_vals = tf.pack([hash_vals] * 35, 1)
+      reshaped_hash_vals = tf.reshape(expanded_hash_vals, [-1, self.vocab_size])
+      reshaped_logits += reshaped_hash_vals
+
     reshaped_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
       reshaped_logits, reshaped_labels)
     masked_loss = tf.mul(reshaped_loss, reshaped_mask)
@@ -254,7 +298,7 @@ class BaseModel(object):
     self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
     self.prev_c = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_c')
     self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
-    self.temperature = tf.placeholder_with_default([0.6], [1])
+    self.temperature = tf.placeholder_with_default([1.0], [1])
 
     # lookup embedding
     prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
@@ -285,11 +329,15 @@ class HyperModel(BaseModel):
     super(HyperModel, self).__init__(params, unigram_probs,
                                      context_vocab_sizes=context_vocab_sizes)
 
-    uembeds = None
-    if params.use_mikolov_adaptation or params.use_hyper_adaptation:
-      uembeds = self.final_context_embed
+    hash_func = None  # setup the hash table
+    if hasattr(params, 'use_hash_table') and params.use_hash_table:
+      hash_func = self.GetHashFunc(params)
 
-    cell = HyperCell(params.cell_size, uembeds,
+    context_embeds = None
+    if params.use_mikolov_adaptation or params.use_hyper_adaptation:
+      context_embeds = self.final_context_embed
+
+    cell = HyperCell(params.cell_size, context_embeds,
                      mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
 
@@ -304,27 +352,26 @@ class HyperModel(BaseModel):
     self.outputs = outputs
     reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
     projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
-    self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss)
+    self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss,
+                      hash_func=hash_func)
 
     self.CreateDecodingGraph(cell, params)
 
+  def GetHashFunc(self, params):
+    """Returns a function that hashes context."""
+    hash_table = tf.get_variable(
+      'hash_table', [params.hash_table_size],
+      initializer=tf.random_normal_initializer(0, 0.1))
 
-def PrintParams(handle=sys.stdout.write):
-  """Print the names of the parameters and their sizes. 
+    w_hash_mat = tf.constant(np.random.randint(2**30, size=[1, params.num_hashes]), 
+                             dtype=tf.int32)
+    s_hash_mat = tf.constant(np.random.randint(2**30, size=[1, params.num_hashes]),
+                             dtype=tf.int32)
 
-  Args:
-    handle: where to write the param sizes to
-  """
-  handle('NETWORK SIZE REPORT\n')
-  param_count = 0
-  fmt_str = '{0: <25}\t{1: >12}\t{2: >12,}\n'
-  for p in tf.trainable_variables():
-    shape = p.get_shape()
-    shape_str = 'x'.join([str(x.value) for x in shape])
-    handle(fmt_str.format(p.name, shape_str, np.prod(shape).value))
-    param_count += np.prod(shape).value
-  handle(''.join(['-'] * 60))
-  handle('\n')
-  handle(fmt_str.format('total', '', param_count))
-  if handle==sys.stdout.write:
-    sys.stdout.flush()
+    def GetHash(ids, s_id):
+      hw = tf.matmul(tf.expand_dims(tf.to_int32(ids), 1), w_hash_mat)
+      hs = tf.mul(s_id, s_hash_mat)
+      h = tf.abs(tf.mod(hw + hs, params.hash_table_size))
+      h_val = tf.reduce_sum(tf.nn.embedding_lookup(hash_table, h), 1)
+      return h_val
+    return GetHash

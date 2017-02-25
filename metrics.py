@@ -1,6 +1,8 @@
 import collections
+import sys
 
 import numpy as np
+import tensorflow as tf
 
 
 def Metrics(preds, labs, show=True):
@@ -61,4 +63,23 @@ class MovingAvg(object):
     self.val = self.p * self.val + (1.0 - self.p) * v
     return self.val
       
-  
+
+def PrintParams(handle=sys.stdout.write):
+  """Print the names of the parameters and their sizes. 
+
+  Args:
+    handle: where to write the param sizes to
+  """
+  handle('NETWORK SIZE REPORT\n')
+  param_count = 0
+  fmt_str = '{0: <25}\t{1: >12}\t{2: >12,}\n'
+  for p in tf.trainable_variables():
+    shape = p.get_shape()
+    shape_str = 'x'.join([str(x.value) for x in shape])
+    handle(fmt_str.format(p.name, shape_str, np.prod(shape).value))
+    param_count += np.prod(shape).value
+  handle(''.join(['-'] * 60))
+  handle('\n')
+  handle(fmt_str.format('total', '', param_count))
+  if handle==sys.stdout.write:
+    sys.stdout.flush()
