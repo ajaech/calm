@@ -60,12 +60,12 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
 
 
 class HyperCell(rnn_cell.RNNCell):
+  """LSTM cell with coupled input and forget gates."""
 
   def __init__(self, num_units, context_embed, mikolov_adapt=False, hyper_adapt=False):
     self._num_units = num_units
     self._forget_bias = 1.0
     self._activation = tf.tanh
-    self.context_embed = context_embed
     self.mikolov_adapt = mikolov_adapt
     self.hyper_adapt = hyper_adapt
 
@@ -78,10 +78,14 @@ class HyperCell(rnn_cell.RNNCell):
           'adaptation_bias', [3 * self._num_units],
           initializer=tf.constant_initializer(np.ones(3 * self._num_units)))
 
+        self.adaptation_coeff = (tf.matmul(context_embed, self.adaptation_weights)
+                                 + self.adaptation_bias)
+
       if self.mikolov_adapt:
         self.biases = tf.get_variable(
           'mikolov_biases', 
           [context_embed.get_shape()[1].value, 3 * self._num_units])
+        self.delta = tf.matmul(context_embed, self.biases)
 
   @property
   def state_size(self):
@@ -98,18 +102,16 @@ class HyperCell(rnn_cell.RNNCell):
       adapted = _linear([inputs, h], 3 * self._num_units, True, scope=scope)
 
       if self.hyper_adapt:
-        adaptation_coeff = (tf.matmul(self.context_embed, self.adaptation_weights)
-                            + self.adaptation_bias)
-        adapted = tf.mul(adaptation_coeff, adapted)
+        # TODO: apply the hyper adaptation before the additive bias
+        adapted = tf.mul(self.adaptation_coeff, adapted)
         
       if self.mikolov_adapt:
-        delta = tf.matmul(self.context_embed, self.biases)
-        adapted += delta
+        adapted += self.delta
 
-      # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+      # j = new_input, f = forget_gate, o = output_gate
       j, f, o = tf.split(1, 3, adapted)
       forget_gate = tf.sigmoid(f + self._forget_bias)
-      input_gate = 1.0 - forget_gate
+      input_gate = 1.0 - forget_gate  # input and forget gates are coupled
 
       new_c = (c * forget_gate + input_gate * self._activation(j))
       new_h = self._activation(new_c) * tf.sigmoid(o)
@@ -125,7 +127,6 @@ class BaseModel(object):
     self.unigram_probs = unigram_probs
     self.max_length = params.max_len
     self.vocab_size = len(unigram_probs)
-    self._embedding_dims = params.embedding_dims
     self.num_context_vars = len(context_vocab_sizes)
     self.x = tf.placeholder(tf.int32, [params.batch_size, self.max_length], name='x')
     self.y = tf.placeholder(tf.int64, [params.batch_size, self.max_length], name='y')
@@ -161,23 +162,22 @@ class BaseModel(object):
         self.final_context_embed = tf.nn.tanh(tf.matmul(context_embeds, context_mlp) + 
                                               context_bias)
 
+    # Initalize the word embedding table
     if params.use_softmax_adaptation:
       self._word_embeddings = tf.get_variable(
-        'word_embeddings', [self.vocab_size, self._embedding_dims + params.context_embed_sizes[0]])
+        'word_embeddings', [self.vocab_size, params.embedding_dims + params.context_embed_sizes[0]])
     else:
       self._word_embeddings = tf.get_variable(
-        'word_embeddings', [self.vocab_size, self._embedding_dims])
-      
+        'word_embeddings', [self.vocab_size, params.embedding_dims])
+    # Lookup the input embeddings
     self._inputs = tf.nn.embedding_lookup(self._word_embeddings, self.x)
-
     if params.use_softmax_adaptation:
       self._inputs = self._inputs[:, :, params.context_embed_size:]
 
     self.base_bias = tf.get_variable('base_bias', [self.vocab_size])
-
     self.dropout_keep_prob = tf.placeholder_with_default(1.0, (), name='keep_prob')
     
-    # make a mask
+    # Make a mask to delete the padding
     indicator = tf.sequence_mask(tf.to_int32(self.seq_len - 1), self.max_length)
     sz = [params.batch_size, self.max_length]
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
@@ -207,33 +207,36 @@ class BaseModel(object):
 
       masked_loss = self.ComputeLoss(reshaped_outputs, self._word_embeddings,
                                      hash_func=hash_func)
-      self.masked_loss = masked_loss
 
     self.per_word_loss = tf.reshape(masked_loss, [-1, self.max_length])
-    per_sentence_loss = tf.reduce_sum(self.per_word_loss, 1)
-    self.per_sentence_loss = tf.div(per_sentence_loss, 
+    self.per_sentence_loss = tf.div(tf.reduce_sum(self.per_word_loss, 1),
                                     tf.reduce_sum(self._mask, 1))
 
     self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
+  def _GetSample(self, true_classes, num_sampled):
+    """Helper function for sampled softmax loss."""
+    return tf.nn.fixed_unigram_candidate_sampler(
+      true_classes=true_classes,
+      num_true=1,
+      num_sampled=num_sampled,
+      unique=True,
+      range_max=self.vocab_size,
+      unigrams=self.unigram_probs)
 
   def AltNCE(self, weights, out_embeddings, num_sampled, hash_func):
+    """This is the version of NCE that is compatible with the feature hashing.
+
+    To make it work, the sampling is done per sentence rather than per time-step.
+    """
     losses = []
     w_unpack = tf.unpack(weights, axis=0)
     y_unpack = tf.unpack(self.y, axis=0)
     context_var = self.context_placeholders['subreddit']
     for idx, (w, y) in enumerate(zip(w_unpack, y_unpack)):
-      c_val = context_var[idx]
+      h_func = lambda(x): hash_func(x, context_var[idx])
       y_expanded = tf.expand_dims(y, 1)
-      sampled_values = tf.nn.fixed_unigram_candidate_sampler(
-        true_classes=y_expanded,
-        num_true=1,
-        num_sampled=num_sampled,
-        unique=True,
-        range_max=self.vocab_size,
-        unigrams=self.unigram_probs)
-      
-      h_func = lambda(x): hash_func(x, c_val)
+      sampled_valued = self._GetSample(y_expanded, num_sampled)
 
       nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias,
                                               y_expanded, w, num_sampled, self.vocab_size,
@@ -245,14 +248,7 @@ class BaseModel(object):
   def DoNCE(self, weights, out_embeddings, num_sampled=256):
     losses = []
     for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
-      sampled_values = tf.nn.fixed_unigram_candidate_sampler(
-        true_classes=y,
-        num_true=1,
-        num_sampled=num_sampled,
-        unique=True,
-        range_max=self.vocab_size,
-        unigrams=self.unigram_probs
-      )
+      sampled_values = self._GetSample(y, num_sampled)
       nce_loss = tf.nn.sampled_softmax_loss(out_embeddings, self.base_bias, 
                                             w, y, num_sampled, self.vocab_size, 
                                             sampled_values=sampled_values)
@@ -262,6 +258,7 @@ class BaseModel(object):
 
   def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None,
                   hash_func=None):
+    """Computes loss without sampling (full vocabulary)."""
     if user_embeddings is not None:
       replicated = tf.concat(0, [user_embeddings for _ in range(35)])
       reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
@@ -292,7 +289,8 @@ class BaseModel(object):
 
     return masked_loss
 
-  def CreateDecodingGraph(self, cell, params):
+  def CreateDecodingGraph(self, params):
+    """Construct the part of the graph used for decoding."""
 
     # placeholders for decoder
     self.prev_word = tf.placeholder(tf.int32, (), name='prev_word')
@@ -310,12 +308,11 @@ class BaseModel(object):
     # one iteration of recurrent layer
     state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with vs.variable_scope('RNN', reuse=True):
-      result, (self.next_c, self.next_h) = cell(prev_embed, state)
+      result, (self.next_c, self.next_h) = self.cell(prev_embed, state)
       proj_result = tf.matmul(result, self.linear_proj)
       
     if params.use_softmax_adaptation:
       proj_result = tf.concat(1, [self.final_context_embed, proj_result])
-
 
     # softmax layer
     bias = self.base_bias
@@ -341,12 +338,12 @@ class HyperModel(BaseModel):
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
       context_embeds = self.final_context_embed
 
-    cell = HyperCell(params.cell_size, context_embeds,
+    self.cell = HyperCell(params.cell_size, context_embeds,
                      mikolov_adapt=params.use_mikolov_adaptation,
                      hyper_adapt=params.use_hyper_adaptation)
 
     regularized_cell = rnn_cell.DropoutWrapper(
-      cell, output_keep_prob=self.dropout_keep_prob,
+      self.cell, output_keep_prob=self.dropout_keep_prob,
       input_keep_prob=self.dropout_keep_prob)
 
     self.linear_proj = tf.get_variable(
@@ -359,10 +356,10 @@ class HyperModel(BaseModel):
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss,
                       hash_func=self.hash_func)
 
-    self.CreateDecodingGraph(cell, params)
+    self.CreateDecodingGraph(self.cell, params)
 
   def GetHashFunc(self, params):
-    """Returns a function that hashes context."""
+    """Returns a function that hashes context & unigrams."""
     self.hash_table = tf.get_variable(
       'hash_table', [params.hash_table_size],
       initializer=tf.random_normal_initializer(0, 0.1))
