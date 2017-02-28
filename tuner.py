@@ -35,14 +35,13 @@ def GetRandomSetting():
   model_params['iters'] = random.choice([130000, 140000, 160000])
   model_params['splitter'] = 'word'
 
-  model_params['use_hash_table'] = True
-  model_params['num_hashes'] = random.choice([1, 2, 8, 16, 32])
+  model_params['use_hash_table'] = random.choice([True, True, False])
   model_params['hash_table_size'] = random.choice([30000001, 10000001, 50000001])
 
   return model_params
 
 
-cmd = './rnnlm.py exps/hash{0} --params={1} --threads={2} --data={3} 2> exps/hash{0}.error.log'
+cmd = './rnnlm.py exps/bloom{0} --params={1} --threads={2} --data={3} 2> exps/bloom{0}.error.log'
 
 for i in xrange(30):
   d = GetRandomSetting()

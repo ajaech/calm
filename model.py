@@ -132,7 +132,7 @@ class BaseModel(object):
     self.seq_len = tf.placeholder(tf.int64, [params.batch_size], name='seq_len')
 
     enable_context_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
-                             or params.use_softmax_adaptation)
+                             or params.use_softmax_adaptation or params.use_hash_table)
     if enable_context_embeds:
       self.context_placeholders = {}
       self.context_embeddings = {}
@@ -316,8 +316,12 @@ class BaseModel(object):
     if params.use_softmax_adaptation:
       proj_result = tf.concat(1, [self.final_context_embed, proj_result])
 
+
     # softmax layer
     bias = self.base_bias
+    if hasattr(params, 'use_hash_table') and params.use_hash_table:
+      hval = self.hash_func(self.all_ids, self.context_placeholders['subreddit'])
+      bias += hval
     logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
     self.next_idx = tf.argmax(logits, 1)
     self.next_prob = tf.nn.softmax(logits / self.temperature)
@@ -329,9 +333,9 @@ class HyperModel(BaseModel):
     super(HyperModel, self).__init__(params, unigram_probs,
                                      context_vocab_sizes=context_vocab_sizes)
 
-    hash_func = None  # setup the hash table
+    self.hash_func = None  # setup the hash table
     if hasattr(params, 'use_hash_table') and params.use_hash_table:
-      hash_func = self.GetHashFunc(params)
+      self.hash_func = self.GetHashFunc(params)
 
     context_embeds = None
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
@@ -353,25 +357,55 @@ class HyperModel(BaseModel):
     reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
     projected_outputs = tf.matmul(reshaped_outputs, self.linear_proj)
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss,
-                      hash_func=hash_func)
+                      hash_func=self.hash_func)
 
     self.CreateDecodingGraph(cell, params)
 
   def GetHashFunc(self, params):
     """Returns a function that hashes context."""
-    hash_table = tf.get_variable(
+    self.hash_table = tf.get_variable(
       'hash_table', [params.hash_table_size],
       initializer=tf.random_normal_initializer(0, 0.1))
 
-    w_hash_mat = tf.constant(np.random.randint(2**30, size=[1, params.num_hashes]), 
+    bloom_table_size = 100000007
+    self.bloom_table = tf.Variable(trainable=False, dtype=tf.uint8, 
+                                   initial_value=np.zeros(bloom_table_size))
+    self.subreddit_id = tf.placeholder(tf.int32, (), name='subreddit_id')
+    self.selected_ids = tf.placeholder(tf.int32, [None], name='selected_ids')
+
+    w_hash_mat = tf.constant(np.random.randint(2**30, size=[1, 16]), 
                              dtype=tf.int32)
-    s_hash_mat = tf.constant(np.random.randint(2**30, size=[1, params.num_hashes]),
+    s_hash_mat = tf.constant(np.random.randint(2**30, size=[1, 16]),
                              dtype=tf.int32)
 
+    hw = tf.matmul(tf.expand_dims(self.selected_ids, 1), w_hash_mat)
+    hs = tf.mul(self.subreddit_id, s_hash_mat)
+    h = tf.abs(tf.mod(hw + hs, bloom_table_size))
+    reshaped_h = tf.reshape(h, [-1])
+    self.update_bloom = tf.scatter_update(
+      self.bloom_table, reshaped_h, tf.ones_like(reshaped_h, dtype=tf.uint8))
+
+    w_hash = tf.constant(np.random.randint(2**30), dtype=tf.int32)
+    s_hash = tf.constant(np.random.randint(2**30), dtype=tf.int32)
     def GetHash(ids, s_id):
-      hw = tf.matmul(tf.expand_dims(tf.to_int32(ids), 1), w_hash_mat)
-      hs = tf.mul(s_id, s_hash_mat)
+      ids = tf.to_int32(ids)
+
+      # lookup entry in bloom table
+      hw_bloom = tf.matmul(tf.expand_dims(ids, 1), w_hash_mat)
+      hs_bloom = tf.squeeze(tf.mul(s_id, s_hash_mat))
+      h_bloom = tf.abs(tf.mod(hw_bloom + hs_bloom, bloom_table_size))
+      bloom_lookup = tf.nn.embedding_lookup(self.bloom_table, h_bloom)
+      final_bloom = tf.to_float(tf.reduce_prod(bloom_lookup, 1))
+
+      hw = tf.mul(ids, w_hash)
+      hs = tf.mul(s_id, s_hash)
       h = tf.abs(tf.mod(hw + hs, params.hash_table_size))
-      h_val = tf.reduce_sum(tf.nn.embedding_lookup(hash_table, h), 1)
-      return h_val
+      h_val = tf.nn.embedding_lookup(self.hash_table, h)
+      
+      filtered_h_val = tf.mul(final_bloom, h_val)
+      return filtered_h_val
+
+    self.all_ids = tf.range(0, self.vocab_size)
+    self.sub_hash = GetHash(self.all_ids, self.subreddit_id)
+
     return GetHash

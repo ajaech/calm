@@ -34,27 +34,14 @@ parser.add_argument('--data', type=str,
 parser.add_argument('--partition_override', type=bool, default=False,
                     help='use to skip train/test partitioning')
 parser.add_argument('--threads', type=int, default=12)
-parser.add_argument('--initialize', default=None)
 args = parser.parse_args()
-
-if args.initialize is not None and args.mode != 'train':
-  sys.stderr.write('ERROR: dont use initialize arg when mode is not train.\n')
-  exit(-1)
 
 if not os.path.exists(args.expdir):
   os.mkdir(args.expdir)
 
 param_filename = os.path.join(args.expdir, 'params.json')
-if args.initialize:  # copy over vocab & param files
-  param_filename = os.path.join(args.initialize, 'params.json')
-  shutil.copyfile(os.path.join(args.initialize, 'word_vocab.pickle'),
-                  os.path.join(args.expdir, 'word_vocab.pickle'))
-  shutil.copyfile(os.path.join(args.initialize, 'context_vocab.pickle'),
-                  os.path.join(args.expdir, 'context_vocab.pickle'))
-  shutil.copyfile(os.path.join(args.initialize, 'params.json'),
-                  os.path.join(args.expdir, 'params.json'))
 
-if args.mode == 'train' and args.initialize is None:
+if args.mode == 'train':
   param_dict = json.load(args.params)
   params = bunch.Bunch(param_dict)
   with open(param_filename, 'w') as f:
@@ -90,7 +77,7 @@ if args.mode in ('train', 'eval', 'classify'):
   dataset.ReadData(args.data, params.context_vars + ['text'],
                    mode=mode, splitter=splitter)
 
-if args.mode == 'train' and args.initialize is None:
+if args.mode == 'train':
   vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
   context_vocabs = {}
   for context_var in params.context_vars:
@@ -157,8 +144,15 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
-  if args.initialize:
-    saver.restore(session, os.path.join(args.initialize, 'model.bin'))
+  if params.use_hash_table:
+    print('preparing bloom filter')
+    m = model
+    s = session
+    grps = dataset.data.groupby('subreddit')
+    for s_id, grp in grps:
+      unigrams = np.unique(list(grp.text.values))
+      session.run(model.update_bloom, {model.subreddit_id: np.array(s_id),
+                                       model.selected_ids: unigrams})
 
   avgcost = metrics.MovingAvg(0.90)
   start_time = time.time()
@@ -200,6 +194,24 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
+  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',, 
+              'pittsburgh']
+  if hasattr(model, 'sub_hash'):
+    def Process(subname):
+      m = model
+      z = session.run(m.sub_hash, {m.subreddit_id: context_vocabs['subreddit'][subname]})
+      vals = z.argsort()
+      topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], z[vals[-1-i]]) for i in range(10)]
+      print ' '.join(topwords)
+
+    for subname in subnames:
+      print subname
+      Process(subname)
+
+  if not params.use_softmax_adaptation:
+    return
+
   uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
   subreddit = tf.placeholder(tf.int32, ())
   scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
@@ -214,8 +226,7 @@ def Debug(expdir):
     print ' '.join(topwords)
     
   #subnames = ['en', 'es', 'pt', 'de', 'it']
-  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
-              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming']
+
   for subname in subnames:
     s = session.run(scores, {subreddit: context_vocabs['subreddit'][subname]})
     Process(s, subname)
@@ -345,7 +356,8 @@ def Greedy(expdir):
     return ppl, SEPERATOR.join(words)
     
   sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
-                 'tifu', 'WTF', 'AskHistorians', 'hockey', 'AskReddit']
+                 'tifu', 'WTF', 'AskHistorians', 'hockey', 'AskReddit',
+                 'malefashionadvice']
 
   for n in sample_list:
     print '~~~{0}~~~'.format(n)

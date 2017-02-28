@@ -11,9 +11,6 @@ from model import HyperModel
 from vocab import Vocab
 
 
-import code
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir')
 parser.add_argument('--threads', type=int, default=8)
@@ -45,7 +42,7 @@ saver.restore(session, os.path.join(args.expdir, 'model.bin'))
 
 for _ in range(10):
   sentence = raw_input("Please enter something: ")
-  sentence = sentence.lower()
+  sentence = sentence.lower().strip()
   words = ['<S>'] + sentence.split() + ['</S>']
   seq_len = len(words)
   if seq_len < params.max_len:

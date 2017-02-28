@@ -7,7 +7,7 @@ import code
 
 results = []
 
-for dirname in glob.glob('exps/reddit*'):
+for dirname in glob.glob('exps/bloom*'):
 
   if os.path.isfile(dirname):
     continue

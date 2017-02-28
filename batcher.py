@@ -137,6 +137,7 @@ class Dataset(object):
     self.current_val_idx += self.batch_size
     return self.data.iloc[idx]
 
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--filename', default='/s0/ajaech/reddit.tsv.bz2')
