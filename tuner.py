@@ -20,22 +20,22 @@ def GetRandomSetting():
     [7, 13, 20])
   model_params['dropout_keep_prob'] = random.choice([1.0])
   model_params['nce_samples'] = random.choice([95, 120, 160])
-  model_params['batch_size'] = random.choice([50, 57, 65])
+  model_params['batch_size'] = random.choice([100, 120, 140])
 
-  model_params['embedding_dims'] = random.choice([118, 129, 140])
-  model_params['cell_size'] = random.choice([280, 305, 315])
+  model_params['embedding_dims'] = random.choice([145, 160, 175])
+  model_params['cell_size'] = random.choice([260, 280, 300])
 
   model_params['max_len'] = 35
 
-  model_params['use_softmax_adaptation'] = False
+  model_params['use_softmax_adaptation'] = random.choice([True, False, False, False])
   model_params['use_mikolov_adaptation'] = random.choice([True, True, False, False, False])
   model_params['use_hyper_adaptation'] = random.choice([True, True, False, False, False])
 
   model_params['learning_rate'] = 0.001
-  model_params['iters'] = random.choice([130000, 140000, 160000])
+  model_params['iters'] = random.choice([100000, 85000, 120000])
   model_params['splitter'] = 'word'
 
-  model_params['use_hash_table'] = random.choice([True, True, False])
+  model_params['use_hash_table'] = random.choice([True, True, False, False, False])
   model_params['hash_table_size'] = random.choice([30000001, 10000001, 50000001])
 
   return model_params
@@ -43,7 +43,7 @@ def GetRandomSetting():
 
 cmd = './rnnlm.py exps/bloom{0} --params={1} --threads={2} --data={3} 2> exps/bloom{0}.error.log'
 
-for i in xrange(30):
+for i in xrange(60, 70):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:

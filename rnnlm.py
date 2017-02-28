@@ -59,7 +59,7 @@ if args.mode != 'train':
   params.batch_size = 20
 
 SEPERATOR = ' '
-if hasattr(params, 'splitter') and params.splitter == 'char':
+if params.splitter == 'char':
   SEPERATOR = ''
 
 if args.mode in ('train', 'eval', 'classify'):
@@ -195,8 +195,8 @@ def Debug(expdir):
   metrics.PrintParams()
 
   subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
-              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',, 
-              'pittsburgh']
+              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
+              'pittsburgh', 'cars', 'hockey']
   if hasattr(model, 'sub_hash'):
     def Process(subname):
       m = model
@@ -209,13 +209,6 @@ def Debug(expdir):
       print subname
       Process(subname)
 
-  if not params.use_softmax_adaptation:
-    return
-
-  uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
-  subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
-
   def Process(s, subname):
     s = np.squeeze(s.T)
     vals = s.argsort()
@@ -224,6 +217,10 @@ def Debug(expdir):
     topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]])
                 for i in range(10)]
     print ' '.join(topwords)
+
+  uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
+  subreddit = tf.placeholder(tf.int32, ())
+  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
     
   #subnames = ['en', 'es', 'pt', 'de', 'it']
 
@@ -256,14 +253,10 @@ def BeamSearch(expdir):
   varname = 'subreddit'
   subname = 'worldnews'
 
-  beam_size = 10
-  beam_items = []
-
   # initalize beam
-  beam_items.append(
-    BeamItem('<S>', 
-             np.zeros((1, params.cell_size)), 
-             np.zeros((1, params.cell_size))))
+  beam_size = 10
+  beam_items = [BeamItem('<S>', np.zeros((1, params.cell_size)), 
+                         np.zeros((1, params.cell_size)))]
 
   for i in xrange(12):
     new_beam_items = []
@@ -287,7 +280,6 @@ def BeamSearch(expdir):
 
       a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
       current_prob, prevstate_c, prevstate_h = a
-
 
       top_entries = []
       top_values = []
@@ -450,7 +442,7 @@ if args.mode == 'classify':
 if args.mode == 'debug':
   Debug(args.expdir)
   Greedy(args.expdir)
-  #BeamSearch(args.expdir)
+  BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

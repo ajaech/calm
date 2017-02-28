@@ -40,6 +40,9 @@ session = tf.Session(config=config)
 
 saver.restore(session, os.path.join(args.expdir, 'model.bin'))
 
+subreddit = raw_input('Choose a subreddit: ')
+subreddit = subreddit.strip()
+
 for _ in range(10):
   sentence = raw_input("Please enter something: ")
   sentence = sentence.lower().strip()
@@ -47,7 +50,6 @@ for _ in range(10):
   seq_len = len(words)
   if seq_len < params.max_len:
     words += ['</S>'] * (params.max_len - seq_len + 1)
-  subreddit = 'AskReddit'
 
   feed_dict = {
     model.x: np.expand_dims([vocab[w] for w in words[:-1]], 0),

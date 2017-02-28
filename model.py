@@ -356,7 +356,7 @@ class HyperModel(BaseModel):
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss,
                       hash_func=self.hash_func)
 
-    self.CreateDecodingGraph(self.cell, params)
+    self.CreateDecodingGraph(params)
 
   def GetHashFunc(self, params):
     """Returns a function that hashes context & unigrams."""

@@ -1,10 +1,8 @@
 import argparse
 import bz2
 import gzip
-import itertools
 import numpy as np
 import pandas
-import random
 
 
 def GetFileHandle(filename):
@@ -121,7 +119,6 @@ class Dataset(object):
   def GetNextBatch(self):
     if self.current_idx + self.batch_size > len(self.data):
       self.current_idx = 0
-
       self._Permute()    
 
     idx = range(self.current_idx, self.current_idx + self.batch_size)
