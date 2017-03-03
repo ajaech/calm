@@ -62,12 +62,14 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
 class HyperCell(rnn_cell.RNNCell):
   """LSTM cell with coupled input and forget gates."""
 
-  def __init__(self, num_units, context_embed, mikolov_adapt=False, hyper_adapt=False):
+  def __init__(self, num_units, context_embed, mikolov_adapt=False, hyper_adapt=False,
+               fix_hyper=False):
     self._num_units = num_units
     self._forget_bias = 1.0
     self._activation = tf.tanh
     self.mikolov_adapt = mikolov_adapt
     self.hyper_adapt = hyper_adapt
+    self.fix_hyper = fix_hyper
 
     with vs.variable_scope('hyper_lstm_cell'):
       if self.hyper_adapt:
@@ -77,6 +79,11 @@ class HyperCell(rnn_cell.RNNCell):
         self.adaptation_bias = tf.get_variable(
           'adaptation_bias', [3 * self._num_units],
           initializer=tf.constant_initializer(np.ones(3 * self._num_units)))
+
+        if fix_hyper:
+          # need to define the bias here
+          self.base_bias = tf.get_variable('bias', [3 * self._num_units],
+                                           initializer=tf.constant_initializer(0.0, tf.float32))
 
         self.adaptation_coeff = (tf.matmul(context_embed, self.adaptation_weights)
                                  + self.adaptation_bias)
@@ -99,11 +106,13 @@ class HyperCell(rnn_cell.RNNCell):
     with vs.variable_scope("hyper_lstm_cell", reuse=reuse):
       # Parameters of gates are concatenated into one multiply for efficiency.
       c, h = state
-      adapted = _linear([inputs, h], 3 * self._num_units, True, scope=scope)
+      adapted = _linear([inputs, h], 3 * self._num_units, self.fix_hyper, scope=scope)
 
       if self.hyper_adapt:
-        # TODO: apply the hyper adaptation before the additive bias
         adapted = tf.mul(self.adaptation_coeff, adapted)
+
+        if self.fix_hyper:
+          adapted += self.base_bias
         
       if self.mikolov_adapt:
         adapted += self.delta
@@ -236,7 +245,7 @@ class BaseModel(object):
     for idx, (w, y) in enumerate(zip(w_unpack, y_unpack)):
       h_func = lambda(x): hash_func(x, context_var[idx])
       y_expanded = tf.expand_dims(y, 1)
-      sampled_valued = self._GetSample(y_expanded, num_sampled)
+      sampled_values = self._GetSample(y_expanded, num_sampled)
 
       nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias,
                                               y_expanded, w, num_sampled, self.vocab_size,
@@ -338,9 +347,13 @@ class HyperModel(BaseModel):
     if params.use_mikolov_adaptation or params.use_hyper_adaptation:
       context_embeds = self.final_context_embed
 
+    fix_hyper = False
+    if hasattr(params, 'fix_hyper'):
+      fix_hyper = params.fix_hyper
     self.cell = HyperCell(params.cell_size, context_embeds,
-                     mikolov_adapt=params.use_mikolov_adaptation,
-                     hyper_adapt=params.use_hyper_adaptation)
+                          mikolov_adapt=params.use_mikolov_adaptation,
+                          hyper_adapt=params.use_hyper_adaptation,
+                          fix_hyper=fix_hyper)
 
     regularized_cell = rnn_cell.DropoutWrapper(
       self.cell, output_keep_prob=self.dropout_keep_prob,

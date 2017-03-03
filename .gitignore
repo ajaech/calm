@@ -1,3 +1,6 @@
 *~
 *.pyc
 \#*
+.RData
+.Rhistory
+.migrate*
