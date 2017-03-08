@@ -17,23 +17,29 @@ import time
 
 from model import HyperModel
 from vocab import Vocab
-from batcher import Dataset
+from dataset import Dataset
 import metrics
 
 import code
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('expdir')
+parser.add_argument('expdir', help='experiment directory')
 parser.add_argument('--mode', default='train',
                     choices=['train', 'debug', 'eval', 'dump', 'classify'])
 parser.add_argument('--params', type=argparse.FileType('r'), 
+                    help='json file with hyperparameters',
                     default='default_params.json')
+parser.add_argument('--vocab', type=str, help='predefined vocab', default=None)
 parser.add_argument('--data', type=str, 
+                    help='where to load the data',
                     default='/n/falcon/s0/ajaech/reddit.tsv.bz2')
+parser.add_argument('--single_subreddit', type=str, default=None,
+                    help='restrict to a single subreddit')
 parser.add_argument('--partition_override', type=bool, default=False,
                     help='use to skip train/test partitioning')
-parser.add_argument('--threads', type=int, default=12)
+parser.add_argument('--threads', type=int, default=12,
+                    help='how many threads to use in tensorflow')
 args = parser.parse_args()
 
 if not os.path.exists(args.expdir):
@@ -75,10 +81,14 @@ if args.mode in ('train', 'eval', 'classify'):
                     batch_size=params.batch_size)
   print 'reading data'
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=splitter)
+                   mode=mode, splitter=splitter,
+                   single_subreddit=args.single_subreddit)
 
 if args.mode == 'train':
-  vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
+  if args.vocab is not None:
+    vocab = Vocab.Load(args.vocab)
+  else:
+    vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
   context_vocabs = {}
   for context_var in params.context_vars:
     v = Vocab.MakeFromData([[u] for u in dataset.GetColumn(context_var)],
@@ -114,8 +124,7 @@ session = tf.Session(config=config)
 def GetFeedDict(batch, use_dropout=True):
   s = np.array(list(batch.text.values))  # hacky
   feed_dict = {
-    model.x: s[:, :-1],
-    model.y: s[:, 1:],
+    model.word_ids: s,
     model.seq_len: batch.seq_lens.values,
     model.dropout_keep_prob: params.dropout_keep_prob
   }
@@ -146,8 +155,6 @@ def Train(expdir):
 
   if params.use_hash_table:
     print('preparing bloom filter')
-    m = model
-    s = session
     grps = dataset.data.groupby('subreddit')
     for s_id, grp in grps:
       unigrams = np.unique(list(grp.text.values))
@@ -182,8 +189,8 @@ def Train(expdir):
 def DumpEmbeddings(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  word = model._word_embeddings.eval(session=session)
-
+  #word = model._word_embeddings.eval(session=session)
+  word = model.context_embeddings['subreddit'].eval(session=session)
   with gzip.open(os.path.join(expdir, 'embeddings.tsv.gz'), 'w') as f:
     for w in word:
       f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
@@ -194,13 +201,12 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
-  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
-              'pittsburgh', 'cars', 'hockey']
+              'pittsburgh', 'cars', 'hockey', 'programming']
   if hasattr(model, 'sub_hash'):
     def Process(subname):
-      m = model
-      z = session.run(m.sub_hash, {m.subreddit_id: context_vocabs['subreddit'][subname]})
+      z = session.run(model.sub_hash, {model.subreddit_id: context_vocabs['subreddit'][subname]})
       vals = z.argsort()
       topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], z[vals[-1-i]]) for i in range(10)]
       print ' '.join(topwords)
@@ -218,12 +224,12 @@ def Debug(expdir):
                 for i in range(10)]
     print ' '.join(topwords)
 
+  Process(model.base_bias.eval(session=session), 'basebias')
+
   uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
   subreddit = tf.placeholder(tf.int32, ())
   scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
     
-  #subnames = ['en', 'es', 'pt', 'de', 'it']
-
   for subname in subnames:
     s = session.run(scores, {subreddit: context_vocabs['subreddit'][subname]})
     Process(s, subname)
@@ -251,7 +257,7 @@ def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   varname = 'subreddit'
-  subname = 'worldnews'
+  subname = 'relationships'
 
   # initalize beam
   beam_size = 10
@@ -315,7 +321,7 @@ def Greedy(expdir):
 
     words = []
     log_probs = []
-    for i in xrange(15):
+    for i in xrange(20):
       feed_dict = {                      
         model.prev_word: vocab[current_word],
         model.prev_c: prevstate_c,
@@ -347,13 +353,13 @@ def Greedy(expdir):
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
-  sample_list = ['AskWomen', 'AskMen', 'exmormon', 'Music', 'worldnews',
-                 'tifu', 'WTF', 'AskHistorians', 'hockey', 'AskReddit',
-                 'malefashionadvice']
-
+  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
+                 'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
+  sample_list = ['Seattle']
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for idx in range(5):
+    for idx in range(10000):
       ppl, sentence = Process('subreddit', n, greedy=idx==0)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
@@ -408,7 +414,7 @@ def Eval(expdir):
   results = []
   for pos in xrange(min(dataset.GetNumBatches(), 2000)):
     batch = dataset.GetNextBatch()
-    feed_dict = GetFeedDict(batch)
+    feed_dict = GetFeedDict(batch, use_dropout=False)
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)

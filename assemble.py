@@ -13,9 +13,17 @@ for dirname in glob.glob('exps/bloom*'):
     continue
 
   # load the params file
-  with open(os.path.join(dirname, 'params.json'), 'r') as g:
+  params_filename = os.path.join(dirname, 'params.json')
+  if not os.path.exists(params_filename):
+    continue  # this is just an empty directory
+  with open(params_filename, 'r') as g:
     params = json.load(g)
   params['dir'] = dirname
+
+  model_filename = os.path.join(dirname, 'model.bin')
+  if os.path.exists(model_filename):
+    modtime = os.path.getmtime(model_filename)
+    params['finish_time'] = modtime
 
   # Check for perplexity logfile
   filename = os.path.join(dirname, 'ppl.txt')
@@ -62,7 +70,7 @@ for dirname in glob.glob('exps/bloom*'):
     ppl = data.groupby('uname').apply(PPL)
 
     summary['ppl'] = ppl.apply(np.exp).values
-    summary = summary[summary.length > 200].sort_values('ppl')
+    summary = summary[summary.length > 150].sort_values('ppl')
 
     summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
 
