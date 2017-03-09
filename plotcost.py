@@ -32,7 +32,10 @@ def PlotIt(filename, var, diff=False, invert=False, smooth=1.0):
       line = line.replace("'", '"')
       if ' nan,' in line:
         continue
-      data.append(json.loads(line))
+      try:
+        data.append(json.loads(line))
+      except ValueError:
+        print line
   data = pandas.DataFrame(data[1:])
 
   if var not in data.columns:

@@ -8,7 +8,7 @@ import shutil
 import tensorflow as tf
 
 from vocab import Vocab
-from batcher import ReadData, Dataset
+from dataset import ReadData, Dataset
 from model import HyperModel, MikolovModel
 
 tf.app.flags.DEFINE_string("expdir", "",

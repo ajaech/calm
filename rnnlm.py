@@ -203,7 +203,7 @@ def Debug(expdir):
 
   subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
-              'pittsburgh', 'cars', 'hockey', 'programming']
+              'pittsburgh', 'cars', 'hockey']
   if hasattr(model, 'sub_hash'):
     def Process(subname):
       z = session.run(model.sub_hash, {model.subreddit_id: context_vocabs['subreddit'][subname]})
@@ -314,7 +314,7 @@ def BeamSearch(expdir):
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(varname, subname, greedy=False):
+  def Process(varname, subname, greedy=True):
     current_word = '<S>'
     prevstate_h = np.zeros((1, params.cell_size))
     prevstate_c = np.zeros((1, params.cell_size))
@@ -354,12 +354,11 @@ def Greedy(expdir):
     return ppl, SEPERATOR.join(words)
     
   sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
-                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
+                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
                  'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
-  sample_list = ['Seattle']
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for idx in range(10000):
+    for idx in range(6):
       ppl, sentence = Process('subreddit', n, greedy=idx==0)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
