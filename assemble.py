@@ -53,10 +53,12 @@ for dirname in glob.glob('exps/bloom*'):
         params['acc'] = accuracy
 
   results.append(params)
-      
 
+  # make the pplsummary file
   filename = os.path.join(dirname, 'pplstats.csv.gz')
-  if os.path.exists(filename):
+  summary_filename = os.path.join(dirname, 'pplsummary.csv')
+  if os.path.exists(filename) and ((not os.path.exists(summary_filename)) or
+                                   os.path.getmtime(filename) > os.path.getmtime(summary_filename)):
     print filename
     data = pandas.read_csv(filename)
    
@@ -72,7 +74,7 @@ for dirname in glob.glob('exps/bloom*'):
     summary['ppl'] = ppl.apply(np.exp).values
     summary = summary[summary.length > 150].sort_values('ppl')
 
-    summary.to_csv(os.path.join(dirname, 'pplsummary.csv'))
+    summary.to_csv(summary_filename)
 
 df = pandas.DataFrame(results)
 if 'ppl' in df.columns:
