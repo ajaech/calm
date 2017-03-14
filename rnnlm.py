@@ -321,7 +321,7 @@ def Greedy(expdir):
 
     words = []
     log_probs = []
-    for i in xrange(20):
+    for i in xrange(30):
       feed_dict = {                      
         model.prev_word: vocab[current_word],
         model.prev_c: prevstate_c,
@@ -335,17 +335,19 @@ def Greedy(expdir):
           else:
             feed_dict[placeholder] = np.array([1])
 
-      a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
-      current_prob, prevstate_c, prevstate_h = a
       if greedy:
+        a = session.run([model.next_prob, model.next_c, model.next_h],
+                        feed_dict)
+        current_prob, prevstate_c, prevstate_h = a
         current_word_id = np.argmax(current_prob)
         log_probs.append(-np.log(current_prob.max()))
         current_word = vocab[current_word_id]
         words.append(current_word)
       else:
-        cumulative = np.cumsum(current_prob)
-        current_word_id = np.argmin(cumulative < np.random.rand())
-        log_probs.append(-np.log(current_prob[0, current_word_id]))
+        a = session.run([model.selected, model.selected_p,
+                         model.next_c, model.next_h], feed_dict)
+        current_word_id, current_word_p, prevstate_c, prevstate_h = a
+        log_probs.append(-np.log(current_word_p))
         current_word = vocab[current_word_id]
         words.append(current_word)
       if '</S>' in current_word:
@@ -356,11 +358,13 @@ def Greedy(expdir):
   sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
                  'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
                  'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
+  sample_list = ['math']
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for idx in range(6):
+    for idx in range(30000):
       ppl, sentence = Process('subreddit', n, greedy=idx==0)
-      print '{0:.2f}\t{1}'.format(ppl, sentence)
+      print sentence
+      #print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
 def Classify(expdir):
@@ -445,9 +449,9 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  Debug(args.expdir)
+  #Debug(args.expdir)
   Greedy(args.expdir)
-  BeamSearch(args.expdir)
+  #BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

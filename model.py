@@ -334,6 +334,12 @@ class BaseModel(object):
     self.next_idx = tf.argmax(logits, 1)
     self.next_prob = tf.nn.softmax(logits / self.temperature)
 
+    cumsum = tf.cumsum(self.next_prob, exclusive=True, axis=1)
+    idx = tf.less(cumsum, tf.random_uniform([1]))
+    v = tf.where(idx)
+    self.selected = tf.reduce_max(v)
+    self.selected_p = tf.nn.embedding_lookup(
+      tf.transpose(self.next_prob), self.selected)
 
 class HyperModel(BaseModel):
 
