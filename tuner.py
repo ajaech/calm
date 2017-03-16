@@ -16,15 +16,15 @@ def GetRandomSetting():
   # '/g/ssli/data/LowResourceLM/tweets/val.tsv.gz'
   model_params['context_vars'] = ['case', 'person', 'role']
   model_params['context_embed_sizes'] = random.choice(
-    [[4, 8, 3], [3, 5, 2]])
+    [[4, 7, 3], [5, 7, 4]])
   model_params['context_embed_size'] = random.choice(
-    [6, 12, 20])
-  model_params['dropout_keep_prob'] = random.choice([0.7, 0.6, 0.9])
-  model_params['nce_samples'] = random.choice([80, 95])
-  model_params['batch_size'] = random.choice([80, 130])
+    [9, 15, 22, 30])
+  model_params['dropout_keep_prob'] = random.choice([0.55, 0.65, 0.75])
+  model_params['nce_samples'] = random.choice([70, 110])
+  model_params['batch_size'] = random.choice([90, 120])
 
-  model_params['embedding_dims'] = random.choice([64, 96, 128])
-  model_params['cell_size'] = random.choice([80, 130, 160])
+  model_params['embedding_dims'] = random.choice([80, 110, 130])
+  model_params['cell_size'] = random.choice([120, 140, 175])
 
   model_params['max_len'] = 47
 
@@ -35,7 +35,7 @@ def GetRandomSetting():
     model_params['use_mikolov_adaptation'] = True
 
   model_params['learning_rate'] = 0.001
-  model_params['iters'] = random.choice([135000, 95000, 105000])
+  model_params['iters'] = random.choice([50000, 85000, 60000])
   model_params['splitter'] = 'word'
 
   model_params['use_hash_table'] = random.choice([True, True, True, False, False])
@@ -53,7 +53,7 @@ def GetRandomSetting():
 
 cmd = './rnnlm.py exps/scotus{0} --params={1} --threads={2} --data={3} 2> exps/scotus{0}.error.log'
 
-for i in xrange(10):
+for i in xrange(40, 45):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:

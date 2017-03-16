@@ -105,16 +105,10 @@ if __name__ == '__main__':
   args = parser.parse_args()
 
   if args.filename.endswith('.pickle'):
-    with open(args.filename, 'rb') as f:
-      vs = pickle.load(f)
-      v = vs['subreddit']
-    #v = Vocab.Load(args.filename)
+    #with open(args.filename, 'rb') as f:
+    #  vs = pickle.load(f)
+    #  v = vs['subreddit']
+    v = Vocab.Load(args.filename)
 
     for i in v.GetWords():
       print i
-
-  else:
-    with open(args.filename, 'r') as f:
-      lines = f.readlines()
-    v = Vocab.MakeFromData([x.split() for x in lines], 2)
-    v.Save('turkvocab.pickle')
