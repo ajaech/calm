@@ -88,7 +88,10 @@ if args.mode == 'train':
   if args.vocab is not None:
     vocab = Vocab.Load(args.vocab)
   else:
-    vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=20)
+    min_count = 20
+    if hasattr(params, 'min_vocab_count'):
+      min_count = params.min_vocab_count
+    vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=min_count)
   context_vocabs = {}
   for context_var in params.context_vars:
     v = Vocab.MakeFromData([[u] for u in dataset.GetColumn(context_var)],
@@ -226,6 +229,9 @@ def Debug(expdir):
 
   Process(model.base_bias.eval(session=session), 'basebias')
 
+  if not params.use_softmax_adaptation:
+    return  # nothing else to do here
+
   uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
   subreddit = tf.placeholder(tf.int32, ())
   scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
@@ -236,6 +242,7 @@ def Debug(expdir):
 
 
 class BeamItem(object):
+  """Helper class for beam search."""
   
   def __init__(self, prev_word, prev_c, prev_h):
     self.log_probs = [0.0]
@@ -257,7 +264,7 @@ def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   varname = 'subreddit'
-  subname = 'relationships'
+  subname = 'baseball'
 
   # initalize beam
   beam_size = 10
@@ -419,15 +426,18 @@ def Eval(expdir):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
 
+
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
 
     lens = feed_dict[model.seq_len]
-    unames = batch.subreddit
+    for length, idx, sentence_cost in zip(lens, batch.index, sentence_costs):
+      batch_row = batch.loc[idx]
+      data_row = {'length': length, 'cost': sentence_cost}
+      for context_var in params.context_vars:
+        data_row[context_var] = context_vocabs[context_var][batch_row[context_var]]
 
-    for length, uname, sentence_cost in zip(lens, unames, sentence_costs):
-      results.append({'length': length, 'uname': context_vocabs['subreddit'][uname],
-                      'cost': sentence_cost})
+      results.append(data_row)
 
     words_in_batch = sum(feed_dict[model.seq_len] - 1)
     total_word_count += words_in_batch
@@ -449,9 +459,9 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  #Debug(args.expdir)
-  Greedy(args.expdir)
-  #BeamSearch(args.expdir)
+  Debug(args.expdir)
+  #Greedy(args.expdir)
+  BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

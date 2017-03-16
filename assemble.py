@@ -7,7 +7,7 @@ import code
 
 results = []
 
-for dirname in glob.glob('exps/bloom*'):
+for dirname in glob.glob('exps/scotus*'):
 
   if os.path.isfile(dirname):
     continue
@@ -61,15 +61,22 @@ for dirname in glob.glob('exps/bloom*'):
                                    os.path.getmtime(filename) > os.path.getmtime(summary_filename)):
     print filename
     data = pandas.read_csv(filename)
+
+    cname = 'uname'
+    if 'uname' not in data.columns:
+      if 'subreddit' in data.columns:
+        cname = 'subreddit'
+      else:
+        cname = 'person'
    
-    if len(data.uname.unique()) < 2:
+    if len(data[cname].unique()) < 2:
       continue
  
     def PPL(df):
       return (df.cost * df.length).sum() / df.length.sum()
 
-    summary = data.groupby('uname').length.agg(len).reset_index()
-    ppl = data.groupby('uname').apply(PPL)
+    summary = data.groupby(cname).length.agg(len).reset_index()
+    ppl = data.groupby(cname).apply(PPL)
 
     summary['ppl'] = ppl.apply(np.exp).values
     summary = summary[summary.length > 150].sort_values('ppl')

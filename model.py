@@ -143,6 +143,10 @@ class BaseModel(object):
     self.x = self.word_ids[:, :-1]
     self.y = self.word_ids[:, 1:]
 
+    self.l1_penalty = None
+    if hasattr(params, 'l1_penalty'):
+      self.l1_penalty = params.l1_penalty
+
     enable_context_embeds = (params.use_mikolov_adaptation or params.use_hyper_adaptation 
                              or params.use_softmax_adaptation or params.use_hash_table)
     if enable_context_embeds:
@@ -175,8 +179,10 @@ class BaseModel(object):
 
     # Initalize the word embedding table
     if params.use_softmax_adaptation:
-      self._word_embeddings = tf.get_variable(
-        'word_embeddings', [self.vocab_size, params.embedding_dims + params.context_embed_sizes[0]])
+      total_size = params.embedding_dims + params.context_embed_sizes[0]
+      if len(params.context_embed_sizes) > 1:
+        total_size = params.embedding_dims + params.context_embed_size
+      self._word_embeddings = tf.get_variable('word_embeddings', [self.vocab_size, total_size])
     else:
       self._word_embeddings = tf.get_variable(
         'word_embeddings', [self.vocab_size, params.embedding_dims])
@@ -194,6 +200,7 @@ class BaseModel(object):
     self._mask = tf.select(indicator, tf.ones(sz), tf.zeros(sz))
 
   def OutputHelper(self, reshaped_outputs, params, use_nce_loss=True, hash_func=None):
+    self.cost = 0.0  # default cost value
     if use_nce_loss:
       proj_out =  tf.reshape(reshaped_outputs, [self._mask.get_shape()[0].value,
                                                 self._mask.get_shape()[1].value, -1])
@@ -206,8 +213,9 @@ class BaseModel(object):
       if hash_func is None:
         losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
       else:
-        losses = self.AltNCE(proj_out, self._word_embeddings, params.nce_samples, hash_func)
-                         
+        losses, l1_losses = self.AltNCE(proj_out, self._word_embeddings, params.nce_samples,
+                                        hash_func)
+        self.cost = tf.reduce_mean(l1_losses)
       masked_loss = tf.mul(losses, self._mask)
     else:
       # add in the context embeddings
@@ -223,7 +231,7 @@ class BaseModel(object):
     self.per_sentence_loss = tf.div(tf.reduce_sum(self.per_word_loss, 1),
                                     tf.reduce_sum(self._mask, 1))
 
-    self.cost = tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
+    self.cost += tf.reduce_sum(masked_loss) / tf.reduce_sum(self._mask)    
 
   def _GetSample(self, true_classes, num_sampled):
     """Helper function for sampled softmax loss."""
@@ -244,17 +252,19 @@ class BaseModel(object):
     w_unpack = tf.unpack(weights, axis=0)
     y_unpack = tf.unpack(self.y, axis=0)
     context_var = self.context_placeholders['subreddit']
+    l1_losses = []
     for idx, (w, y) in enumerate(zip(w_unpack, y_unpack)):
       h_func = lambda(x): hash_func(x, context_var[idx])
       y_expanded = tf.expand_dims(y, 1)
       sampled_values = self._GetSample(y_expanded, num_sampled)
 
-      nce_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias,
-                                              y_expanded, w, num_sampled, self.vocab_size,
-                                              sampled_values=sampled_values,
-                                              hash_func=h_func)
+      nce_loss, l1_loss = nn_impl.sampled_softmax_loss(out_embeddings, self.base_bias,
+                                                       y_expanded, w, num_sampled, self.vocab_size,
+                                                       sampled_values=sampled_values,
+                                                       hash_func=h_func)
+      l1_losses.append(l1_loss)
       losses.append(nce_loss)
-    return tf.pack(losses, 0)
+    return tf.pack(losses, 0), l1_losses
 
   def DoNCE(self, weights, out_embeddings, num_sampled=256):
     losses = []
@@ -327,7 +337,7 @@ class BaseModel(object):
 
     # softmax layer
     bias = self.base_bias
-    if hasattr(params, 'use_hash_table') and params.use_hash_table:
+    if params.use_hash_table:
       hval = self.hash_func(self.all_ids, self.context_placeholders['subreddit'])
       bias += hval
     logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
@@ -348,7 +358,7 @@ class HyperModel(BaseModel):
                                      context_vocab_sizes=context_vocab_sizes)
 
     self.hash_func = None  # setup the hash table
-    if hasattr(params, 'use_hash_table') and params.use_hash_table:
+    if params.use_hash_table:
       self.hash_func = self.GetHashFunc(params)
 
     context_embeds = None
@@ -421,9 +431,9 @@ class HyperModel(BaseModel):
       h_val = tf.nn.embedding_lookup(self.hash_table, h)
       
       filtered_h_val = tf.mul(final_bloom, h_val)
-      return filtered_h_val
+      return filtered_h_val, h, final_bloom
 
     self.all_ids = tf.range(0, self.vocab_size)
-    self.sub_hash = GetHash(self.all_ids, self.subreddit_id)
+    self.sub_hash, self.sub_h, self.sub_bloom = GetHash(self.all_ids, self.subreddit_id)
 
-    return GetHash
+    return lambda a, b: GetHash(a, b)[0]

@@ -143,6 +143,8 @@ def _compute_sampled_logits(weights,
     sparse_b = hash_func(all_ids)
     all_b += sparse_b
 
+    l1_cost = tf.reduce_mean(tf.abs(sparse_b))
+
     # true_w shape is [batch_size * num_true, dim]
     # true_b is a [batch_size * num_true] tensor
     true_w = array_ops.slice(
@@ -217,7 +219,7 @@ def _compute_sampled_logits(weights,
         array_ops.zeros_like(sampled_logits)
     ])
 
-  return out_logits, out_labels
+  return out_logits, out_labels, l1_cost
 
 
 def sampled_softmax_loss(weights,
@@ -277,7 +279,7 @@ def sampled_softmax_loss(weights,
     A `batch_size` 1-D tensor of per-example sampled softmax losses.
 
   """
-  logits, labels = _compute_sampled_logits(
+  logits, labels, l1_cost = _compute_sampled_logits(
       weights=weights,
       biases=biases,
       labels=labels,
@@ -294,4 +296,4 @@ def sampled_softmax_loss(weights,
   sampled_losses = nn_ops.softmax_cross_entropy_with_logits(labels=labels,
                                                             logits=logits)
   # sampled_losses is a [batch_size] tensor.
-  return sampled_losses
+  return sampled_losses, l1_cost

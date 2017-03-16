@@ -1,1 +1,26 @@
-{"val_data": null, "cell_size": 300, "context_embed_size": 7, "nce_samples": 250, "use_mikolov_adaptation": true, "iters": 115000, "dropout_keep_prob": 1.0, "batch_size": 35, "learning_rate": 0.001, "max_len": 35, "use_hyper_adaptation": true, "use_softmax_adaptation": true, "splitter": "word", "context_vars": ["subreddit"], "context_embed_sizes": [12], "embedding_dims": 110}
+{
+  "val_data": null,
+  "cell_size": 270,
+  "context_embed_sizes": [
+    21
+  ],
+  "nce_samples": 80,
+  "use_mikolov_adaptation": true,
+  "iters": 115000,
+  "dropout_keep_prob": 0.95,
+  "hash_table_size": 30000001,
+  "use_hyper_adaptation": true,
+  "batch_size": 210,
+  "embedding_dims": 275,
+  "max_len": 35,
+  "fixed_hyper": true,
+  "use_softmax_adaptation": false,
+  "use_hash_table": true,
+  "splitter": "word",
+  "context_vars": [
+    "subreddit"
+  ],
+  "context_embed_size": 20,
+  "learning_rate": 0.001,
+  "l1_penalty": 0.1    
+}
