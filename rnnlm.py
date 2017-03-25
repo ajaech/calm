@@ -72,16 +72,13 @@ if args.mode in ('train', 'eval', 'classify'):
   mode = args.mode
   if args.partition_override:
     mode = 'all'
-  splitter = 'word'
-  if hasattr(params, 'splitter'):
-    splitter = params.splitter
 
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
   print 'reading data'
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=splitter,
+                   mode=mode, splitter=params.splitter,
                    single_subreddit=args.single_subreddit)
 
 if args.mode == 'train':
@@ -156,13 +153,16 @@ def Train(expdir):
   print('initalizing')
   session.run(tf.initialize_all_variables())
 
+  # prepare the bloom filter
   if params.use_hash_table:
     print('preparing bloom filter')
-    grps = dataset.data.groupby('subreddit')
-    for s_id, grp in grps:
-      unigrams = np.unique(list(grp.text.values))
-      session.run(model.update_bloom, {model.subreddit_id: np.array(s_id),
-                                       model.selected_ids: unigrams})
+    for context_var in params.context_vars:
+      grps = dataset.data.groupby(context_var)
+      for s_id, grp in grps:
+        unigrams = np.unique(list(grp.text.values))
+        session.run(model.bloom_updates[context_var],
+                    {model.context_bloom_ids[context_var]: np.array(s_id),
+                     model.selected_ids: unigrams})
 
   avgcost = metrics.MovingAvg(0.90)
   start_time = time.time()
@@ -204,12 +204,14 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
+  context_vocab = context_vocabs['person']
   subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
               'pittsburgh', 'cars', 'hockey']
+  subnames = context_vocab.GetWords()
   if hasattr(model, 'sub_hash'):
     def Process(subname):
-      z = session.run(model.sub_hash, {model.subreddit_id: context_vocabs['subreddit'][subname]})
+      z = session.run(model.sub_hash, {model.subreddit_id: context_vocab[subname]})
       vals = z.argsort()
       topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], z[vals[-1-i]]) for i in range(10)]
       print ' '.join(topwords)
@@ -234,10 +236,10 @@ def Debug(expdir):
 
   uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
   subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['subreddit'][subreddit, :], 1))
+  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['person'][subreddit, :], 1))
     
   for subname in subnames:
-    s = session.run(scores, {subreddit: context_vocabs['subreddit'][subname]})
+    s = session.run(scores, {subreddit: context_vocabs['person'][subname]})
     Process(s, subname)
 
 
@@ -326,6 +328,15 @@ def Greedy(expdir):
     prevstate_h = np.zeros((1, params.cell_size))
     prevstate_c = np.zeros((1, params.cell_size))
 
+    # select random context settings
+    context_settings = {}
+    for context_var in params.context_vars:
+      context_vocab = context_vocabs[context_var]
+      selection = np.random.randint(len(context_vocab))
+      context_settings[context_var] = selection
+      if varname not in params.context_vars:
+        print context_vocab[selection]
+
     words = []
     log_probs = []
     for i in xrange(30):
@@ -340,7 +351,7 @@ def Greedy(expdir):
           if context_var == varname:
             feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
           else:
-            feed_dict[placeholder] = np.array([1])
+            feed_dict[placeholder] = np.array([context_settings[context_var]])
 
       if greedy:
         a = session.run([model.next_prob, model.next_c, model.next_h],
@@ -362,13 +373,13 @@ def Greedy(expdir):
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
-  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
-                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
-                 'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
+  #sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+  #               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
+  #               'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
   sample_list = ['math']
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for idx in range(30000):
+    for idx in range(40000):
       ppl, sentence = Process('subreddit', n, greedy=idx==0)
       print sentence
       #print '{0:.2f}\t{1}'.format(ppl, sentence)
@@ -461,7 +472,7 @@ if args.mode == 'classify':
 if args.mode == 'debug':
   Debug(args.expdir)
   #Greedy(args.expdir)
-  BeamSearch(args.expdir)
+  #BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
