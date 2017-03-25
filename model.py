@@ -70,6 +70,9 @@ class HyperCell(rnn_cell.RNNCell):
     self.hyper_adapt = hyper_adapt
 
     with vs.variable_scope('hyper_lstm_cell'):
+      self.base_bias = tf.get_variable('bias', [3 * self._num_units],
+                                       initializer=tf.constant_initializer(0.0, tf.float32))
+
       if self.hyper_adapt:
         self.adaptation_weights = tf.get_variable(
           'adaptation_weights', 
@@ -77,9 +80,6 @@ class HyperCell(rnn_cell.RNNCell):
         self.adaptation_bias = tf.get_variable(
           'adaptation_bias', [3 * self._num_units],
           initializer=tf.constant_initializer(np.ones(3 * self._num_units)))
-
-        self.base_bias = tf.get_variable('bias', [3 * self._num_units],
-                                         initializer=tf.constant_initializer(0.0, tf.float32))
 
         self.adaptation_coeff = (tf.matmul(context_embed, self.adaptation_weights)
                                  + self.adaptation_bias)
@@ -104,12 +104,12 @@ class HyperCell(rnn_cell.RNNCell):
       c, h = state
       adapted = _linear([inputs, h], 3 * self._num_units, False, scope=scope)
 
+      # Do all the adaptation
       if self.hyper_adapt:
-        adapted = tf.mul(self.adaptation_coeff, adapted)
-        adapted += self.base_bias
-        
+        adapted = tf.mul(self.adaptation_coeff, adapted)                                      
       if self.mikolov_adapt:
-        adapted += self.delta
+        adapted += self.delta        
+      adapted += self.base_bias
 
       # j = new_input, f = forget_gate, o = output_gate
       j, f, o = tf.split(1, 3, adapted)
@@ -145,17 +145,17 @@ class BaseModel(object):
                              or params.use_softmax_adaptation)
     if enable_low_rank_adapt or params.use_hash_table:
       self.context_placeholders = {}
-      context_embeddings = {}
+      self.context_embeddings = {}
       context_embeds = []
       for i, c_var in enumerate(params.context_vars):
         self.context_placeholders[c_var] = tf.placeholder(tf.int32, [None], name=c_var)
         if enable_low_rank_adapt:
-          context_embeddings[params.context_vars[i]] = tf.get_variable(
+          self.context_embeddings[params.context_vars[i]] = tf.get_variable(
             'c_embed_{0}'.format(c_var), 
             [context_vocab_sizes[i], params.context_embed_sizes[i]])
 
-          context_embeds.append(tf.nn.embedding_lookup(context_embeddings[c_var],
-                                                       self.context_placeholders[c_var]))
+          context_embeds.append(tf.nn.embedding_lookup(
+            self.context_embeddings[c_var], self.context_placeholders[c_var]))
 
       if len(context_embeds) == 1:
         self.final_context_embed = context_embeds[0]
@@ -333,7 +333,7 @@ class BaseModel(object):
     # softmax layer
     bias = self.base_bias
     if params.use_hash_table:
-      hval = self.hash_func(self.all_ids, self.context_placeholders['person'])
+      hval = self.hash_func(self.all_ids, self.context_placeholders, self.context_placeholders.keys())
       bias += hval
     logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
     self.next_idx = tf.argmax(logits, 1)
@@ -378,7 +378,7 @@ class HyperModel(BaseModel):
     self.OutputHelper(projected_outputs, params, use_nce_loss=use_nce_loss,
                       hash_func=self.hash_func)
 
-    #self.CreateDecodingGraph(params)
+    self.CreateDecodingGraph(params)
 
   def GetHashFunc(self, params):
     """Returns a function that hashes context & unigrams."""
@@ -446,5 +446,6 @@ class HyperModel(BaseModel):
       return filtered_h_val
 
     self.all_ids = tf.range(0, self.vocab_size)
+    self.sub_hash = lambda placeholders: GetHash(self.all_ids, placeholders, placeholders.keys())
 
     return GetHash

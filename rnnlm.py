@@ -204,14 +204,19 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
-  context_vocab = context_vocabs['person']
+  context_var = 'role'
+  context_idx = params.context_vars.index(context_var)
+  context_vocab = context_vocabs[context_var]
   subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
               'pittsburgh', 'cars', 'hockey']
   subnames = context_vocab.GetWords()
-  if hasattr(model, 'sub_hash'):
+
+  if params.use_hash_table:
+    hash_val = model.sub_hash({context_var: model.context_bloom_ids[context_var]})
+
     def Process(subname):
-      z = session.run(model.sub_hash, {model.subreddit_id: context_vocab[subname]})
+      z = session.run(hash_val, {model.context_bloom_ids[context_var]: context_vocab[subname]})
       vals = z.argsort()
       topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], z[vals[-1-i]]) for i in range(10)]
       print ' '.join(topwords)
@@ -234,12 +239,12 @@ def Debug(expdir):
   if not params.use_softmax_adaptation:
     return  # nothing else to do here
 
-  uword = model._word_embeddings[:, :params.context_embed_sizes[0]]
+  uword = model._word_embeddings[:, :params.context_embed_sizes[context_idx]]
   subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings['person'][subreddit, :], 1))
+  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings[context_var][subreddit, :], 1))
     
   for subname in subnames:
-    s = session.run(scores, {subreddit: context_vocabs['person'][subname]})
+    s = session.run(scores, {subreddit: context_vocabs[context_var][subname]})
     Process(s, subname)
 
 
@@ -472,7 +477,7 @@ if args.mode == 'classify':
 if args.mode == 'debug':
   Debug(args.expdir)
   #Greedy(args.expdir)
-  #BeamSearch(args.expdir)
+  BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

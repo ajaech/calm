@@ -52,11 +52,16 @@ def Metrics(preds, labs, show=True):
 
 class MovingAvg(object):
   
-  def __init__(self, p):
-    self.val = None
-    self.p = p
+  def __init__(self, p, burn_in=1):
+    self.val=None
+    self.p=p
+    self.burn_in=burn_in
 
   def Update(self, v):
+    if self.burn_in > 0:
+      self.burn_in -= 1
+      return v
+
     if self.val is None:
       self.val = v
       return v

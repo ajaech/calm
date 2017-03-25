@@ -6,7 +6,8 @@ import random
 threads = 8
 #data = '/g/ssli/data/LowResourceLM/tweets/train.tsv.gz'
 #data = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
-data = '/homes/ajaech/Downloads/scotus.tsv.gz'
+data = '/g/ssli/data/scotus/aaron/scotus_big.tsv.gz'
+
 
 def GetRandomSetting():
   """Gets a random parameter setting."""
@@ -38,7 +39,7 @@ def GetRandomSetting():
   model_params['iters'] = random.choice([27000, 35000, 42000, 55000])
   model_params['splitter'] = 'word'
 
-  model_params['use_hash_table'] = random.choice([True, True, True, False, False])
+  model_params['use_hash_table'] = random.choice([True, True, False, False, False])
   model_params['hash_table_size'] = random.choice([10000003, 3000007])
 
   model_params['l1_penalty'] = 0.0
@@ -51,7 +52,7 @@ def GetRandomSetting():
 
 cmd = './rnnlm.py exps/scotus{0} --params={1} --threads={2} --data={3} 2> exps/scotus{0}.error.log'
 
-for i in xrange(15):
+for i in xrange(20):
   d = GetRandomSetting()
   fname = os.path.join('settings', '{0}.json'.format(i))
   with open(fname, 'w') as f:
