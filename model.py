@@ -160,7 +160,7 @@ class BaseModel(object):
       if len(context_embeds) == 1:
         self.final_context_embed = context_embeds[0]
         context_size = params.context_embed_sizes[0]
-      else:
+      elif len(context_embeds) > 1:
         context_embeds = tf.concat(1, context_embeds)
 
         context_mlp = tf.get_variable(
@@ -290,8 +290,10 @@ class BaseModel(object):
       all_ids = tf.range(0, self.vocab_size)
       hash_vals = []
       for idx in range(self.x.get_shape()[0]):  # loop over batch_size
-        s_id = self.context_placeholders['person'][idx]
-        hash_vals.append(hash_func(all_ids, s_id))
+        context_var_dict = {c_var: self.context_placeholders[c_var][idx] 
+                            for c_var in self.context_placeholders.keys()}
+        hash_vals.append(hash_func(all_ids, context_var_dict,
+                                   self.context_placeholders.keys()))
       hash_vals = tf.pack(hash_vals)
       expanded_hash_vals = tf.pack([hash_vals] * self.max_length, 1)
       reshaped_hash_vals = tf.reshape(expanded_hash_vals, [-1, self.vocab_size])
@@ -416,7 +418,8 @@ class HyperModel(BaseModel):
       
       h = tf.abs(tf.mod(hw + hs, bloom_table_size))
       reshaped_h = tf.reshape(h, [-1])
-      update_op = tf.scatter_update(self.bloom_table, reshaped_h, tf.ones_like(reshaped_h, dtype=tf.uint8))
+      update_op = tf.scatter_update(self.bloom_table, reshaped_h, 
+                                    tf.ones_like(reshaped_h, dtype=tf.uint8))
       self.bloom_updates[context_var] = update_op
 
 
