@@ -314,37 +314,58 @@ class BaseModel(object):
     self.prev_h = tf.placeholder(tf.float32, [1, params.cell_size], name='prev_h')
     self.temperature = tf.placeholder_with_default([1.0], [1])
 
-    # lookup embedding
-    prev_embed = tf.nn.embedding_lookup(self._word_embeddings, self.prev_word)
-    prev_embed = tf.expand_dims(prev_embed, 0)
+    def DoOneIter(prev_word, prev_c, prev_h):
+
+      # lookup embedding
+      prev_embed = tf.nn.embedding_lookup(self._word_embeddings, prev_word)
+      prev_embed = tf.expand_dims(prev_embed, 0)
     
-    if params.use_softmax_adaptation:
-      prev_embed = prev_embed[:, params.context_embed_size:]
+      if params.use_softmax_adaptation:
+        prev_embed = prev_embed[:, params.context_embed_size:]
 
-    # one iteration of recurrent layer
-    state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
-    with vs.variable_scope('RNN', reuse=True):
-      result, (self.next_c, self.next_h) = self.cell(prev_embed, state)
-      proj_result = tf.matmul(result, self.linear_proj)
+      # one iteration of recurrent layer
+      state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
+      with vs.variable_scope('RNN', reuse=True):
+        result, (next_c, next_h) = self.cell(prev_embed, state)
+        proj_result = tf.matmul(result, self.linear_proj)
       
-    if params.use_softmax_adaptation:
-      proj_result = tf.concat(1, [self.final_context_embed, proj_result])
+      if params.use_softmax_adaptation:
+        proj_result = tf.concat(1, [self.final_context_embed, proj_result])
 
-    # softmax layer
-    bias = self.base_bias
-    if params.use_hash_table:
-      hval = self.hash_func(self.all_ids, self.context_placeholders, self.context_placeholders.keys())
-      bias += hval
-    logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
-    self.next_idx = tf.argmax(logits, 1)
-    self.next_prob = tf.nn.softmax(logits / self.temperature)
+      # softmax layer
+      bias = self.base_bias
+      if params.use_hash_table:
+        hval = self.hash_func(self.all_ids, self.context_placeholders, self.context_placeholders.keys())
+        bias += hval
+      logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
+      next_prob = tf.nn.softmax(logits / self.temperature)
 
-    cumsum = tf.cumsum(self.next_prob, exclusive=True, axis=1)
-    idx = tf.less(cumsum, tf.random_uniform([1]))
-    v = tf.where(idx)
-    self.selected = tf.reduce_max(v)
-    self.selected_p = tf.nn.embedding_lookup(
-      tf.transpose(self.next_prob), self.selected)
+      cumsum = tf.cumsum(next_prob, exclusive=True, axis=1)
+      idx = tf.less(cumsum, tf.random_uniform([1]))
+      selected = tf.reduce_max(tf.where(idx))
+      selected_p = tf.nn.embedding_lookup(tf.transpose(next_prob), selected)
+
+      return next_prob, selected, selected_p, next_c, next_h
+
+    # first time step
+    (self.next_prob, self.selected, self.selected_p, 
+     self.next_c, self.next_h) = DoOneIter(self.prev_word, self.prev_c, self.prev_h)
+
+    # rest of the time steps
+    selections = [self.selected]
+    selected_ps = [self.selected_p]
+    next_c = self.next_c
+    next_h = self.next_h
+    for _ in range(40):
+      _, selected, selected_p, next_c, next_h = DoOneIter(
+        selections[-1], next_c, next_h)
+      selections.append(selected)
+      selected_ps.append(selected_p)
+
+    self.selections = tf.pack(selections)
+    self.selected_ps = tf.pack(selected_ps)
+  
+
 
 class HyperModel(BaseModel):
 

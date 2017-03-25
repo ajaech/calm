@@ -329,10 +329,6 @@ def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   def Process(varname, subname, greedy=True):
-    current_word = '<S>'
-    prevstate_h = np.zeros((1, params.cell_size))
-    prevstate_c = np.zeros((1, params.cell_size))
-
     # select random context settings
     context_settings = {}
     for context_var in params.context_vars:
@@ -342,37 +338,27 @@ def Greedy(expdir):
       if varname not in params.context_vars:
         print context_vocab[selection]
 
-    words = []
-    log_probs = []
-    for i in xrange(30):
-      feed_dict = {                      
-        model.prev_word: vocab[current_word],
-        model.prev_c: prevstate_c,
-        model.prev_h: prevstate_h,
-      }
-      if hasattr(model, 'context_placeholders'):
-        for context_var in params.context_vars:
-          placeholder = model.context_placeholders[context_var]
-          if context_var == varname:
-            feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
-          else:
-            feed_dict[placeholder] = np.array([context_settings[context_var]])
+    feed_dict = {                      
+      model.prev_word: vocab['<S>'],
+      model.prev_c: np.zeros((1, params.cell_size)),
+      model.prev_h: np.zeros((1, params.cell_size)),
+    }
+    if hasattr(model, 'context_placeholders'):
+      for context_var in params.context_vars:
+        placeholder = model.context_placeholders[context_var]
+        if context_var == varname:
+          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+        else:
+          feed_dict[placeholder] = np.array([context_settings[context_var]])
 
-      if greedy:
-        a = session.run([model.next_prob, model.next_c, model.next_h],
-                        feed_dict)
-        current_prob, prevstate_c, prevstate_h = a
-        current_word_id = np.argmax(current_prob)
-        log_probs.append(-np.log(current_prob.max()))
-        current_word = vocab[current_word_id]
-        words.append(current_word)
-      else:
-        a = session.run([model.selected, model.selected_p,
-                         model.next_c, model.next_h], feed_dict)
-        current_word_id, current_word_p, prevstate_c, prevstate_h = a
-        log_probs.append(-np.log(current_word_p))
-        current_word = vocab[current_word_id]
-        words.append(current_word)
+    word_ids, word_probs = session.run([model.selections, model.selected_ps], feed_dict)
+
+    log_probs = []
+    words = []
+    for current_word_id, current_word_p in zip(word_ids, word_probs):
+      log_probs.append(-np.log(current_word_p))
+      current_word = vocab[current_word_id]
+      words.append(current_word)
       if '</S>' in current_word:
         break
     ppl = np.exp(np.mean(log_probs))
@@ -475,9 +461,9 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  Debug(args.expdir)
-  #Greedy(args.expdir)
-  BeamSearch(args.expdir)
+  #Debug(args.expdir)
+  Greedy(args.expdir)
+  #BeamSearch(args.expdir)
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
