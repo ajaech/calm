@@ -64,10 +64,7 @@ for dirname in glob.glob('exps/scotus*'):
 
     cname = 'uname'
     if 'uname' not in data.columns:
-      if 'subreddit' in data.columns:
-        cname = 'subreddit'
-      else:
-        cname = 'person'
+      cname = data.columns[0]
    
     if len(data[cname].unique()) < 2:
       continue
