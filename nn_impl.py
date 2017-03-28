@@ -140,10 +140,12 @@ def _compute_sampled_logits(weights,
         weights, all_ids, partition_strategy=partition_strategy)
     all_b = embedding_ops.embedding_lookup(biases, all_ids)
     
-    sparse_b = hash_func(all_ids)
-    all_b += sparse_b
-
-    l1_cost = tf.reduce_mean(tf.abs(sparse_b))
+    if hash_func is not None:
+      sparse_b = hash_func(all_ids)
+      l1_cost = tf.reduce_mean(tf.abs(sparse_b))
+      all_b += sparse_b
+    else:
+      l1_cost = 0.0
 
     # true_w shape is [batch_size * num_true, dim]
     # true_b is a [batch_size * num_true] tensor

@@ -77,12 +77,8 @@ class HyperCell(rnn_cell.RNNCell):
         self.adaptation_weights = tf.get_variable(
           'adaptation_weights', 
           [context_embed.get_shape()[1].value, 3 * self._num_units])
-        self.adaptation_bias = tf.get_variable(
-          'adaptation_bias', [3 * self._num_units],
-          initializer=tf.constant_initializer(np.ones(3 * self._num_units)))
 
-        self.adaptation_coeff = (tf.matmul(context_embed, self.adaptation_weights)
-                                 + self.adaptation_bias)
+        self.adaptation_coeff = tf.matmul(context_embed, self.adaptation_weights)
 
       if self.mikolov_adapt:
         self.biases = tf.get_variable(
@@ -137,7 +133,7 @@ class BaseModel(object):
     self.x = self.word_ids[:, :-1]
     self.y = self.word_ids[:, 1:]
 
-    self.l1_penalty = None
+    self.l1_penalty = 0.0
     if hasattr(params, 'l1_penalty'):
       self.l1_penalty = params.l1_penalty
 
@@ -202,12 +198,11 @@ class BaseModel(object):
         packed_context_embed = tf.pack([self.final_context_embed] * params.max_len, 1)
         proj_out = tf.concat(2, [packed_context_embed, proj_out])
 
-      if hash_func is None:
-        losses = self.DoNCE(proj_out, self._word_embeddings, num_sampled=params.nce_samples)
-      else:
-        losses, l1_losses = self.AltNCE(proj_out, self._word_embeddings, params.nce_samples,
-                                        hash_func)
-        self.cost = tf.reduce_mean(l1_losses)
+      losses, l1_losses = self.AltNCE(proj_out, self._word_embeddings, params.nce_samples,
+                                      hash_func)
+      self.l1_loss = self.l1_penalty * tf.reduce_mean(l1_losses)
+      self.cost = self.l1_loss
+      
       masked_loss = tf.mul(losses, self._mask)
     else:
       # add in the context embeddings
@@ -245,9 +240,11 @@ class BaseModel(object):
     y_unpack = tf.unpack(self.y, axis=0)
     l1_losses = []
     for idx, (w, y) in enumerate(zip(w_unpack, y_unpack)):
-      context_var_dict = {c_var: self.context_placeholders[c_var][idx] 
-                          for c_var in self.context_placeholders.keys()}
-      h_func = lambda(x): hash_func(x, context_var_dict, self.context_placeholders.keys())
+      h_func = None
+      if hash_func is not None:
+        context_var_dict = {c_var: self.context_placeholders[c_var][idx] 
+                            for c_var in self.context_placeholders.keys()}
+        h_func = lambda(x): hash_func(x, context_var_dict)
       y_expanded = tf.expand_dims(y, 1)
       sampled_values = self._GetSample(y_expanded, num_sampled)
 
@@ -258,17 +255,6 @@ class BaseModel(object):
       l1_losses.append(l1_loss)
       losses.append(nce_loss)
     return tf.pack(losses, 0), l1_losses
-
-  def DoNCE(self, weights, out_embeddings, num_sampled=256):
-    losses = []
-    for w, y in zip(tf.unpack(weights, axis=1), tf.split(1, self.max_length, self.y)):
-      sampled_values = self._GetSample(y, num_sampled)
-      nce_loss = tf.nn.sampled_softmax_loss(out_embeddings, self.base_bias, 
-                                            w, y, num_sampled, self.vocab_size, 
-                                            sampled_values=sampled_values)
-                                          
-      losses.append(nce_loss)
-    return tf.pack(losses, 1)
 
   def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None,
                   hash_func=None):
@@ -292,8 +278,7 @@ class BaseModel(object):
       for idx in range(self.x.get_shape()[0]):  # loop over batch_size
         context_var_dict = {c_var: self.context_placeholders[c_var][idx] 
                             for c_var in self.context_placeholders.keys()}
-        hash_vals.append(hash_func(all_ids, context_var_dict,
-                                   self.context_placeholders.keys()))
+        hash_vals.append(hash_func(all_ids, context_var_dict))
       hash_vals = tf.pack(hash_vals)
       expanded_hash_vals = tf.pack([hash_vals] * self.max_length, 1)
       reshaped_hash_vals = tf.reshape(expanded_hash_vals, [-1, self.vocab_size])
@@ -315,11 +300,10 @@ class BaseModel(object):
     self.temperature = tf.placeholder_with_default([1.0], [1])
 
     def DoOneIter(prev_word, prev_c, prev_h):
-
       # lookup embedding
       prev_embed = tf.nn.embedding_lookup(self._word_embeddings, prev_word)
       prev_embed = tf.expand_dims(prev_embed, 0)
-    
+
       if params.use_softmax_adaptation:
         prev_embed = prev_embed[:, params.context_embed_size:]
 
@@ -327,7 +311,7 @@ class BaseModel(object):
       state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
       with vs.variable_scope('RNN', reuse=True):
         result, (next_c, next_h) = self.cell(prev_embed, state)
-        proj_result = tf.matmul(result, self.linear_proj)
+      proj_result = tf.matmul(result, self.linear_proj)
       
       if params.use_softmax_adaptation:
         proj_result = tf.concat(1, [self.final_context_embed, proj_result])
@@ -335,14 +319,16 @@ class BaseModel(object):
       # softmax layer
       bias = self.base_bias
       if params.use_hash_table:
-        hval = self.hash_func(self.all_ids, self.context_placeholders, self.context_placeholders.keys())
+        hval = self.hash_func(self.all_ids, self.context_placeholders)
         bias += hval
       logits = tf.matmul(proj_result, self._word_embeddings, transpose_b=True) + bias
       next_prob = tf.nn.softmax(logits / self.temperature)
 
       cumsum = tf.cumsum(next_prob, exclusive=True, axis=1)
       idx = tf.less(cumsum, tf.random_uniform([1]))
-      selected = tf.reduce_max(tf.where(idx))
+      selected = tf.reduce_max(tf.where(idx)) 
+      #selected = tf.squeeze(tf.argmax(next_prob, 1))
+      #selected.set_shape(())
       selected_p = tf.nn.embedding_lookup(tf.transpose(next_prob), selected)
 
       return next_prob, selected, selected_p, next_c, next_h
@@ -356,9 +342,10 @@ class BaseModel(object):
     selected_ps = [self.selected_p]
     next_c = self.next_c
     next_h = self.next_h
-    for _ in range(40):
+    selected = self.selected
+    for _ in range(10):
       _, selected, selected_p, next_c, next_h = DoOneIter(
-        selections[-1], next_c, next_h)
+        selected, next_c, next_h)
       selections.append(selected)
       selected_ps.append(selected_p)
 
@@ -404,7 +391,6 @@ class HyperModel(BaseModel):
   def GetHashFunc(self, params):
     """Returns a function that hashes context & unigrams."""
 
-
     bloom_table_size = 100000007
     self.bloom_table = tf.Variable(trainable=False, dtype=tf.uint8, 
                                    initial_value=np.zeros(bloom_table_size))
@@ -421,7 +407,6 @@ class HyperModel(BaseModel):
       initializer=tf.random_normal_initializer(0, 0.05))
     w_hash = tf.constant(np.random.randint(2**30), dtype=tf.int32, name='w_hash')
     s_hashes = {}
-
 
     self.context_bloom_ids = {}
     s_hash_mats = {}
@@ -444,14 +429,14 @@ class HyperModel(BaseModel):
       self.bloom_updates[context_var] = update_op
 
 
-    def GetHash(ids, s_ids, context_vars):
+    def GetHash(ids, s_ids):
       ids = tf.to_int32(ids)
 
       # lookup entry in bloom table
       hw_bloom = tf.matmul(tf.expand_dims(ids, 1), w_hash_mat)
 
       filtered_h_val = 0
-      for c_var in context_vars:
+      for c_var in s_ids.keys():
         s_id = s_ids[context_var]
         hs_bloom = tf.squeeze(tf.mul(s_id, s_hash_mats[context_var]))
         h_bloom = tf.abs(tf.mod(hw_bloom + hs_bloom, bloom_table_size))
@@ -467,6 +452,6 @@ class HyperModel(BaseModel):
       return filtered_h_val
 
     self.all_ids = tf.range(0, self.vocab_size)
-    self.sub_hash = lambda placeholders: GetHash(self.all_ids, placeholders, placeholders.keys())
+    self.sub_hash = lambda placeholders: GetHash(self.all_ids, placeholders)
 
     return GetHash

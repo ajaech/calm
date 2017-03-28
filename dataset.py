@@ -55,8 +55,7 @@ class Dataset(object):
   def GetColumn(self, name):
     return self.data[name]
 
-  def ReadData(self, filename, columns, limit=10000000, mode='train', splitter='word',
-               single_subreddit=None):
+  def ReadData(self, filename, columns, limit=10000000, mode='train', splitter='word'):
     data = ReadData(filename, columns, limit)
 
     SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
@@ -75,12 +74,6 @@ class Dataset(object):
         self.valdata = eval_data.reset_index(drop=True)
       elif mode == 'eval':
         self.data = eval_data.reset_index(drop=True)
-
-    if single_subreddit is not None:
-      self.data = self.data[self.data.subreddit == single_subreddit]
-      if self.valdata is not None:
-        self.valdata = self.valdata[self.valdata.subreddit == single_subreddit]
-        self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
 
     self.data['text'] = self.data['text'].apply(SplitFunc)
 

@@ -34,8 +34,6 @@ parser.add_argument('--vocab', type=str, help='predefined vocab', default=None)
 parser.add_argument('--data', type=str, 
                     help='where to load the data',
                     default='/n/falcon/s0/ajaech/reddit.tsv.bz2')
-parser.add_argument('--single_subreddit', type=str, default=None,
-                    help='restrict to a single subreddit')
 parser.add_argument('--partition_override', type=bool, default=False,
                     help='use to skip train/test partitioning')
 parser.add_argument('--threads', type=int, default=12,
@@ -78,8 +76,7 @@ if args.mode in ('train', 'eval', 'classify'):
                     batch_size=params.batch_size)
   print 'reading data'
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=params.splitter,
-                   single_subreddit=args.single_subreddit)
+                   mode=mode, splitter=params.splitter)
 
 if args.mode == 'train':
   if args.vocab is not None:
@@ -112,7 +109,7 @@ if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
 if args.mode == 'eval':
   use_nce_loss = False
-  params.nce_samples = 800
+  params.nce_samples = 200
 model = HyperModel(
   params, unigram_probs,
   [len(context_vocabs[v]) for v in params.context_vars], 
@@ -170,7 +167,7 @@ def Train(expdir):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=True)
 
-    cost, _ = session.run([model.cost, train_op], feed_dict)
+    cost _ = session.run([model.cost, train_op], feed_dict)
 
     if idx % 40 == 0:
       end_time = time.time()
@@ -185,8 +182,8 @@ def Train(expdir):
       logging.info({'iter': idx, 'cost': avgcost.Update(cost),
                     'rawcost': cost, 'valcost': val_cost})
 
-      if idx % 100 == 0:
-        saver.save(session, os.path.join(expdir, 'model.bin'))
+    if idx % 500 == 0:
+      saver.save(session, os.path.join(expdir, 'model.bin'))
 
 
 def DumpEmbeddings(expdir):
@@ -200,18 +197,34 @@ def DumpEmbeddings(expdir):
       f.write('\n')
 
 
+def CheckHash(expdir):
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+  hash_val = model.sub_hash({'subreddit': model.context_bloom_ids['subreddit']})
+  
+  data = []
+  for subname in context_vocabs['subreddit'].GetWords():
+    print subname
+    z = session.run(hash_val, {model.context_bloom_ids['subreddit']: 
+                               context_vocabs['subreddit'][subname]})
+    for i in range(len(z)):
+      if z[i] != 0.0:
+        data.append({'word': vocab[i], 'subreddit': subname, 'hash': z[i]})
+  code.interact(local=locals())
+  
+
+
 def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
-  context_var = 'role'
+  context_var = 'subreddit'
   context_idx = params.context_vars.index(context_var)
   context_vocab = context_vocabs[context_var]
   subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
               'pittsburgh', 'cars', 'hockey']
-  subnames = context_vocab.GetWords()
-
+  #subnames = context_vocab.GetWords()
+  
   if params.use_hash_table:
     hash_val = model.sub_hash({context_var: model.context_bloom_ids[context_var]})
 
@@ -271,10 +284,10 @@ def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   varname = 'subreddit'
-  subname = 'baseball'
+  subname = 'math'
 
   # initalize beam
-  beam_size = 10
+  beam_size = 15
   beam_items = [BeamItem('<S>', np.zeros((1, params.cell_size)), 
                          np.zeros((1, params.cell_size)))]
 
@@ -294,7 +307,8 @@ def BeamSearch(expdir):
         for context_var in params.context_vars:
           placeholder = model.context_placeholders[context_var]
           if context_var == varname:
-            feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+            feed_dict[placeholder] = np.array(
+              [context_vocabs[context_var][subname]])
           else:
             feed_dict[placeholder] = np.array([0])
 
@@ -304,8 +318,12 @@ def BeamSearch(expdir):
       top_entries = []
       top_values = []
       cumulative = np.cumsum(current_prob)
+      num_tries = 0
       while len(top_entries) < beam_size:
+        num_tries += 1
         current_word_id = np.argmin(cumulative < np.random.rand())
+        if num_tries > 500:  # some times there are not enough words to add
+          break
         if current_word_id not in top_entries:
           top_entries.append(current_word_id)
           top_values.append(current_prob[0, current_word_id])
@@ -328,7 +346,7 @@ def BeamSearch(expdir):
 def Greedy(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(varname, subname, greedy=True):
+  def Process(varname, subname):
     # select random context settings
     context_settings = {}
     for context_var in params.context_vars:
@@ -351,7 +369,7 @@ def Greedy(expdir):
         else:
           feed_dict[placeholder] = np.array([context_settings[context_var]])
 
-    word_ids, word_probs = session.run([model.selections, model.selected_ps], feed_dict)
+    word_ids, word_probs, next_prob = session.run([model.selections, model.selected_ps, model.next_prob], feed_dict)
 
     log_probs = []
     words = []
@@ -364,16 +382,14 @@ def Greedy(expdir):
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
-  #sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
-  #               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
-  #               'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
-  sample_list = ['math']
+  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
+                 'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
-    for idx in range(40000):
-      ppl, sentence = Process('subreddit', n, greedy=idx==0)
-      print sentence
-      #print '{0:.2f}\t{1}'.format(ppl, sentence)
+    for idx in range(4):
+      ppl, sentence = Process('subreddit', n)
+      print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
 def Classify(expdir):
@@ -424,14 +440,13 @@ def Eval(expdir):
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 2000)):
+  for pos in xrange(min(dataset.GetNumBatches(), 200)):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
 
 
     cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
                                        feed_dict)
-
     lens = feed_dict[model.seq_len]
     for length, idx, sentence_cost in zip(lens, batch.index, sentence_costs):
       batch_row = batch.loc[idx]
@@ -451,6 +466,70 @@ def Eval(expdir):
   results.to_csv(os.path.join(expdir, 'pplstats.csv.gz'), compression='gzip')
 
 
+def OldGreedy(expdir):
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+  def Process(varname, subname, greedy=True):
+    current_word = '<S>'
+    prevstate_h = np.zeros((1, params.cell_size))
+    prevstate_c = np.zeros((1, params.cell_size))
+
+    # select random context settings
+    context_settings = {}
+    for context_var in params.context_vars:
+      context_vocab = context_vocabs[context_var]
+      selection = np.random.randint(len(context_vocab))
+      context_settings[context_var] = selection
+      if varname not in params.context_vars:
+        print context_vocab[selection]
+
+    words = []
+    log_probs = []
+    for i in xrange(30):
+      feed_dict = {                      
+        model.prev_word: vocab[current_word],
+        model.prev_c: prevstate_c,
+        model.prev_h: prevstate_h,
+      }
+      if hasattr(model, 'context_placeholders'):
+        for context_var in params.context_vars:
+          placeholder = model.context_placeholders[context_var]
+          if context_var == varname:
+            feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
+          else:
+            feed_dict[placeholder] = np.array([context_settings[context_var]])
+
+      if greedy:
+        a = session.run([model.next_prob, model.next_c, model.next_h],
+                        feed_dict)
+        current_prob, prevstate_c, prevstate_h = a
+        current_word_id = np.argmax(current_prob)
+        log_probs.append(-np.log(current_prob.max()))
+        current_word = vocab[current_word_id]
+        words.append(current_word)
+      else:
+        a = session.run([model.selected, model.selected_p,
+                         model.next_c, model.next_h], feed_dict)
+        current_word_id, current_word_p, prevstate_c, prevstate_h = a
+        log_probs.append(-np.log(current_word_p))
+        current_word = vocab[current_word_id]
+        words.append(current_word)
+      if '</S>' in current_word:
+        break
+    ppl = np.exp(np.mean(log_probs))
+    return ppl, SEPERATOR.join(words)
+    
+  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
+                 'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
+  #sample_list = ['math']
+  for n in sample_list:
+    print '~~~{0}~~~'.format(n)
+    for idx in range(5):
+      ppl, sentence = Process('subreddit', n, greedy=idx==0)
+      print '{0:.2f}\t{1}'.format(ppl, sentence)
+
+
 if args.mode == 'train':
   Train(args.expdir)
 
@@ -461,9 +540,11 @@ if args.mode == 'classify':
   Classify(args.expdir)
 
 if args.mode == 'debug':
-  #Debug(args.expdir)
-  Greedy(args.expdir)
-  #BeamSearch(args.expdir)
+  #CheckHash(args.expdir)
+  Debug(args.expdir)
+  BeamSearch(args.expdir)
+  #OldGreedy(args.expdir)
+  
 
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)
