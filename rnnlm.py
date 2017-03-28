@@ -167,7 +167,7 @@ def Train(expdir):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=True)
 
-    cost _ = session.run([model.cost, train_op], feed_dict)
+    cost, _ = session.run([model.cost, train_op], feed_dict)
 
     if idx % 40 == 0:
       end_time = time.time()
