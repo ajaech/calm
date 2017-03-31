@@ -428,7 +428,6 @@ class HyperModel(BaseModel):
                                     tf.ones_like(reshaped_h, dtype=tf.uint8))
       self.bloom_updates[context_var] = update_op
 
-
     def GetHash(ids, s_ids):
       ids = tf.to_int32(ids)
 
@@ -437,14 +436,14 @@ class HyperModel(BaseModel):
 
       filtered_h_val = 0
       for c_var in s_ids.keys():
-        s_id = s_ids[context_var]
-        hs_bloom = tf.squeeze(tf.mul(s_id, s_hash_mats[context_var]))
+        s_id = s_ids[c_var]
+        hs_bloom = tf.squeeze(tf.mul(s_id, s_hash_mats[c_var]))
         h_bloom = tf.abs(tf.mod(hw_bloom + hs_bloom, bloom_table_size))
         bloom_lookup = tf.nn.embedding_lookup(self.bloom_table, h_bloom)
         final_bloom = tf.to_float(tf.reduce_prod(bloom_lookup, 1))
 
         hw = tf.mul(ids, w_hash)
-        hs = tf.mul(s_id, s_hashes[context_var])
+        hs = tf.mul(s_id, s_hashes[c_var])
         h = tf.abs(tf.mod(hw + hs, params.hash_table_size))
         h_val = tf.nn.embedding_lookup(self.hash_table, h)
       
@@ -453,5 +452,6 @@ class HyperModel(BaseModel):
 
     self.all_ids = tf.range(0, self.vocab_size)
     self.sub_hash = lambda placeholders: GetHash(self.all_ids, placeholders)
+    self.HashGetter = GetHash
 
     return GetHash
