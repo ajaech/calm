@@ -23,8 +23,8 @@ def Metrics(preds, labs, show=True):
   for lang in all_langs:
     num_correct += confusion_matrix[(lang, lang)]
   acc = num_correct / float(len(preds))
-  print 'accuracy = {0:.3f}'.format(acc)
   if show:
+    print 'accuracy = {0:.3f}'.format(acc)
     print ' Lang     Prec.   Rec.   F1'
     print '------------------------------'
   scores = []
@@ -47,7 +47,17 @@ def Metrics(preds, labs, show=True):
   if show:
     print '------------------------------'
     print fmt_str.format('Total:', totals[0], totals[1], totals[2])
-  return totals[2]
+  return totals[2], acc
+
+
+def GetPPL(filename):
+  if os.path.exists(filename):
+    with open(filename, 'r') as f:
+      lines = f.readlines()
+    if len(lines):
+      ppl = lines[-1].split()[-1]
+      return ppl
+  return None
 
 
 class MovingAvg(object):

@@ -72,7 +72,7 @@ class Dataset(object):
       if mode == 'train':
         self.data = train_data
         self.valdata = eval_data.reset_index(drop=True)
-      elif mode == 'eval':
+      elif mode == 'eval' or mode == 'classify':
         self.data = eval_data.reset_index(drop=True)
 
     self.data['text'] = self.data['text'].apply(SplitFunc)
@@ -100,6 +100,9 @@ class Dataset(object):
 
     if self.preshuffle:
       self._Permute()
+
+  def Filter(self, subreddits):
+    self.data = self.data[self.data.subreddit.isin(subreddits)]
 
   def _Prepare(self, df, word_vocab, context_vocabs):
     df['seq_lens'] = df['text'].apply(
