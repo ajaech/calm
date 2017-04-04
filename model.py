@@ -391,6 +391,11 @@ class HyperModel(BaseModel):
   def GetHashFunc(self, params):
     """Returns a function that hashes context & unigrams."""
 
+    disable_bloom = False
+    if hasattr(params, 'disable_bloom'):
+      disable_bloom = params.disable_bloom
+    
+
     bloom_table_size = 100000007
     self.bloom_table = tf.Variable(trainable=False, dtype=tf.uint8, 
                                    initial_value=np.zeros(bloom_table_size))
@@ -447,7 +452,10 @@ class HyperModel(BaseModel):
         h = tf.abs(tf.mod(hw + hs, params.hash_table_size))
         h_val = tf.nn.embedding_lookup(self.hash_table, h)
       
-        filtered_h_val += tf.mul(final_bloom, h_val)
+        if disable_bloom:
+          filtered_h_val += h_val
+        else:
+          filtered_h_val += tf.mul(final_bloom, h_val)
       return filtered_h_val
 
     self.all_ids = tf.range(0, self.vocab_size)

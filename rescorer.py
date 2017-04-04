@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+"""
+Interactive script to compute perplexity sample sentences. 
+
+This is meant to be an example of how to implement a reranker 
+based on a previously trained model.
+"""
 import argparse
 import bunch
 import json
@@ -60,4 +66,4 @@ for _ in range(10):
   }
 
   r = session.run(model.per_sentence_loss, feed_dict)
-  print r * (seq_len - 1)
+  print np.exp(r)

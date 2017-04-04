@@ -104,12 +104,12 @@ else:
 
 
 unigram_probs = vocab.GetUnigramProbs()
-use_nce_loss = args.mode == 'train'
+use_nce_loss = (args.mode == 'train') 
 if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
-if args.mode == 'eval':
+if args.mode == 'classify':
   use_nce_loss = False
-  params.nce_samples = 200
+  params.nce_samples = 400
 model = HyperModel(
   params, unigram_probs,
   [len(context_vocabs[v]) for v in params.context_vars], 
@@ -199,16 +199,21 @@ def DumpEmbeddings(expdir):
 
 def CheckHash(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
-  hash_val = model.sub_hash({'subreddit': model.context_bloom_ids['subreddit']})
+  context_var = 'subreddit'
+  hash_val = model.HashGetter(
+    model.all_ids, 
+    {context_var: model.context_bloom_ids[context_var]})
   
   data = []
-  for subname in context_vocabs['subreddit'].GetWords():
+  for subname in context_vocabs[context_var].GetWords():
     print subname
-    z = session.run(hash_val, {model.context_bloom_ids['subreddit']: 
-                               context_vocabs['subreddit'][subname]})
+    z = session.run(hash_val, {model.context_bloom_ids[context_var]: 
+                               context_vocabs[context_var][subname]})
     for i in range(len(z)):
       if z[i] != 0.0:
-        data.append({'word': vocab[i], 'subreddit': subname, 'hash': z[i]})
+        data.append({'word': vocab[i], context_var: subname, 'hash': z[i]})
+  df = pandas.DataFrame(data)
+  df = df.sort_values('hash')
   code.interact(local=locals())
   
 
@@ -217,13 +222,13 @@ def Debug(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
 
-  context_var = 'subreddit'
+  context_var = 'case'
   context_idx = params.context_vars.index(context_var)
   context_vocab = context_vocabs[context_var]
-  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'pics', 'videos', 'worldnews',
+  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'worldnews',
               'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
               'pittsburgh', 'cars', 'hockey']
-  #subnames = context_vocab.GetWords()
+  subnames = context_vocab.GetWords()
   
   if params.use_hash_table:
     hash_val = model.sub_hash({context_var: model.context_bloom_ids[context_var]})
@@ -283,15 +288,15 @@ class BeamItem(object):
 def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  varname = 'subreddit'
-  subname = 'math'
+  varname = 'lang'
+  subname = 'en'
 
   # initalize beam
   beam_size = 15
   beam_items = [BeamItem('<S>', np.zeros((1, params.cell_size)), 
                          np.zeros((1, params.cell_size)))]
 
-  for i in xrange(12):
+  for i in xrange(params.max_len):
     new_beam_items = []
     for beam_item in beam_items:
       if beam_item.words[-1] == '</S>':  # don't extend past end-of-sentence token
@@ -340,7 +345,7 @@ def BeamSearch(expdir):
       new_beam_items = sorted(new_beam_items, key=lambda x: x.Cost())
       beam_items = new_beam_items[:beam_size]
   for item in beam_items:
-    print item.Cost(), ' '.join(item.words)
+    print item.Cost(), SEPERATOR.join(item.words)
 
 
 def Greedy(expdir):
@@ -382,7 +387,7 @@ def Greedy(expdir):
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
-  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'worldnews',
                  'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
                  'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
   for n in sample_list:
@@ -393,31 +398,40 @@ def Greedy(expdir):
 
 
 def Classify(expdir):
-  dataset.Prepare(vocab, context_vocabs)
-
   print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
+
+  context_var = 'lang'
+  placeholder = model.context_placeholders[context_var]
+  lang_vocab = context_vocabs[context_var]
+  vocab_subset = lang_vocab.GetWords()
+  #vocab_subset = ['mildlyinteresting', 'baseball', 'books', 'cars', 'explainlikeimfive', 
+  #                'hockey', 'math', 'nba', 'programming', 'malefashionadvice', 'books']
+
+  print 'preparing dataset'
+  #  dataset.Filter(vocab_subset)
+  dataset.Prepare(vocab, context_vocabs)
 
   results = []
   all_labels = []
   all_preds = []
   for pos in xrange(dataset.GetNumBatches()):
+    if pos % 10 == 0:
+      print pos
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
-    langs = feed_dict[model.context_placeholders['lang']]
+    langs = feed_dict[placeholder]
 
     costs = []
     labels = np.array(langs)
-    lang_vocab = context_vocabs['lang']
-    for i in range(len(lang_vocab)):
-      feed_dict[model.context_placeholders['lang']][:] = i
+    for i in range(len(vocab_subset)):
+      feed_dict[placeholder][:] = lang_vocab[vocab_subset[i]]
     
       sentence_costs =  session.run(model.per_sentence_loss, feed_dict)
       costs.append(sentence_costs)
 
-    lang_names = [lang_vocab[i] for i in range(len(lang_vocab))]
     for label, c_array in zip(labels, np.array(costs).T):
-      d = dict(zip(lang_names, c_array))
+      d = dict(zip(vocab_subset, c_array))
       d['label'] = lang_vocab[label]
       results.append(d)
 
@@ -426,8 +440,8 @@ def Classify(expdir):
     all_labels += list(labels)
   df = pandas.DataFrame(results)
   df.to_csv(os.path.join(expdir, 'classify.csv'))
-  metrics.Metrics([lang_vocab[i] for i in all_preds],
-                  [lang_vocab[i] for i in all_labels])
+  #metrics.Metrics([lang_vocab[i] for i in all_preds],
+  #                [lang_vocab[i] for i in all_labels])
 
 
 def Eval(expdir):
@@ -444,10 +458,9 @@ def Eval(expdir):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
 
-
-    cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
-                                       feed_dict)
+    cost, sentence_costs = session.run([model.cost, model.per_sentence_loss], feed_dict)
     lens = feed_dict[model.seq_len]
+
     for length, idx, sentence_cost in zip(lens, batch.index, sentence_costs):
       batch_row = batch.loc[idx]
       data_row = {'length': length, 'cost': sentence_cost}
@@ -519,14 +532,16 @@ def OldGreedy(expdir):
     ppl = np.exp(np.mean(log_probs))
     return ppl, SEPERATOR.join(words)
     
-  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'pics', 'videos', 'worldnews',
+  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'worldnews',
                  'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
                  'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
-  #sample_list = ['math']
+  
+  varname = 'lang'
+  sample_list = context_vocabs[varname].GetWords()
   for n in sample_list:
     print '~~~{0}~~~'.format(n)
     for idx in range(5):
-      ppl, sentence = Process('subreddit', n, greedy=idx==0)
+      ppl, sentence = Process(varname, n, greedy=idx==0)
       print '{0:.2f}\t{1}'.format(ppl, sentence)
 
 
@@ -542,7 +557,7 @@ if args.mode == 'classify':
 if args.mode == 'debug':
   #CheckHash(args.expdir)
   Debug(args.expdir)
-  BeamSearch(args.expdir)
+  #BeamSearch(args.expdir)
   #OldGreedy(args.expdir)
   
 
