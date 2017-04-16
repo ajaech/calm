@@ -4,31 +4,31 @@ import os
 import random
 
 threads = 8
-data = '/g/ssli/data/LowResourceLM/tweets/train.tsv.gz'
-#data = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
+#data = '/g/ssli/data/LowResourceLM/tweets/train.tsv.gz'
+data = '/n/falcon/s0/ajaech/reddit.tsv.bz2'
 #data = '/g/ssli/data/scotus/aaron/scotus_big.tsv.gz'
 
 def GetStratified(n):
   model_params = {}
 
-  model_params['context_vars'] = ["lang"]
-  model_params['context_embed_sizes'] = [8]
-  model_params['context_embed_size'] = None
-  model_params['min_vocab_count'] = 5
-  model_params['max_len'] = 200
-  model_params['dropout_keep_prob'] = 0.9
-  model_params['val_data'] = '/g/ssli/data/LowResourceLM/tweets/val.tsv.gz'
-
-  model_params['nce_samples'] = None
-  model_params['batch_size'] = 200
-  model_params['embedding_dims'] = 30
-  model_params['cell_size'] = 300
+  model_params['nce_samples'] = 100
+  model_params['batch_size'] = 400
+  model_params['embedding_dims'] = 200
+  model_params['cell_size'] = 240
   model_params['learning_rate'] = 0.001
-  model_params['iters'] = 50000
+  model_params['iters'] = 70000
 
-  model_params['splitter'] = 'char'
-  model_params['hash_table_size'] = 1000007
-  model_params['disable_bloom'] = True
+  model_params['context_vars'] = ['subreddit']
+  model_params['context_embed_sizes'] = [25]
+  model_params['context_embed_size'] = None
+  model_params['min_vocab_count'] = 20
+  model_params['max_len'] = 35
+  model_params['dropout_keep_prob'] = 1.0
+  model_params['val_data'] = None
+
+  model_params['splitter'] = 'word'
+  model_params['hash_table_size'] = 70000027
+  model_params['disable_bloom'] = False
 
   if n & 1 > 0:
     model_params['use_hash_table'] = True
@@ -118,7 +118,7 @@ def GetRandomSetting(i=None):
   return model_params
 
 
-cmd = './rnnlm.py exps/ctweet{0} --params={1} --threads={2} --data={3} --partition_override True 2> exps/ctweet{0}.error.log'
+cmd = './rnnlm.py exps/finalstrat{0} --params={1} --threads={2} --data={3} 2> exps/finalstrat{0}.error.log'
 
 for i in xrange(16):
   d = GetStratified(i)

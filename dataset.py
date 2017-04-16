@@ -61,18 +61,18 @@ class Dataset(object):
     SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
 
     self.valdata = None
-    if mode == 'all':
+    if mode == 'all' or mode == 'classify':
       self.data = data
-      self.valdata = ReadData('/g/ssli/data/LowResourceLM/tweets/val.tsv.gz',
-                              columns, limit)
-      self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
+      #self.valdata = ReadData('/g/ssli/data/LowResourceLM/tweets/val.tsv.gz',
+      #['lang', 'text'], limit)
+      #self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
     else:
       train_data = data[(data.index.values - 1) % 10 > 1]
       eval_data = data[(data.index.values - 1) % 10 <= 1]
       if mode == 'train':
         self.data = train_data
         self.valdata = eval_data.reset_index(drop=True)
-      elif mode == 'eval' or mode == 'classify':
+      elif mode == 'eval':
         self.data = eval_data.reset_index(drop=True)
 
     self.data['text'] = self.data['text'].apply(SplitFunc)
@@ -101,8 +101,8 @@ class Dataset(object):
     if self.preshuffle:
       self._Permute()
 
-  def Filter(self, subreddits):
-    self.data = self.data[self.data.subreddit.isin(subreddits)]
+  def Filter(self, subreddits, context_var):
+    self.data = self.data[self.data[context_var].isin(subreddits)]
 
   def _Prepare(self, df, word_vocab, context_vocabs):
     df['seq_lens'] = df['text'].apply(

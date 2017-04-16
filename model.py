@@ -378,7 +378,7 @@ class HyperModel(BaseModel):
 
     self.linear_proj = tf.get_variable(
       'linear_proj', [params.cell_size, params.embedding_dims])
-    outputs, _ = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
+    outputs, self.zz = tf.nn.dynamic_rnn(regularized_cell, self._inputs, dtype=tf.float32,
                                    sequence_length=self.seq_len)
     self.outputs = outputs
     reshaped_outputs = tf.reshape(outputs, [-1, params.cell_size])
@@ -433,7 +433,7 @@ class HyperModel(BaseModel):
                                     tf.ones_like(reshaped_h, dtype=tf.uint8))
       self.bloom_updates[context_var] = update_op
 
-    def GetHash(ids, s_ids):
+    def GetHash(ids, s_ids, debug=False):
       ids = tf.to_int32(ids)
 
       # lookup entry in bloom table
@@ -456,10 +456,16 @@ class HyperModel(BaseModel):
           filtered_h_val += h_val
         else:
           filtered_h_val += tf.mul(final_bloom, h_val)
+
+      if debug:
+        return filtered_h_val, final_bloom, h
+
       return filtered_h_val
 
     self.all_ids = tf.range(0, self.vocab_size)
-    self.sub_hash = lambda placeholders: GetHash(self.all_ids, placeholders)
+    self.sub_hash, self.sub_bloom, self.sub_h = GetHash(
+      self.all_ids, self.context_placeholders, debug=True)
+    
     self.HashGetter = GetHash
 
     return GetHash
