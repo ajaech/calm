@@ -1,17 +1,17 @@
 {
   "val_data": null,
-  "cell_size": 270,
+  "cell_size": 60,
   "context_embed_sizes": [
     21
   ],
   "nce_samples": 80,
   "use_mikolov_adaptation": true,
-  "iters": 115000,
+  "iters": 1000,
   "dropout_keep_prob": 0.95,
   "hash_table_size": 30000001,
   "use_hyper_adaptation": true,
-  "batch_size": 210,
-  "embedding_dims": 275,
+  "batch_size": 10,
+  "embedding_dims": 40,
   "max_len": 35,
   "fixed_hyper": true,
   "use_softmax_adaptation": false,

@@ -175,7 +175,7 @@ def Train(expdir):
       time_diff = end_time - start_time
       start_time = end_time
       batches_per_second = time_diff / 40
-      print 'batches per second {0}'.format(batches_per_second)
+      print 'batches per second {0:.3f}'.format(batches_per_second)
 
       feed_dict = GetFeedDict(dataset.GetValBatch(), use_dropout=False)
       val_cost = session.run(model.cost, feed_dict)
