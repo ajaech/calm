@@ -1,13 +1,13 @@
 #!/usr/bin/bash
+# Script to help with evaluating trained models
 
-#data="/g/ssli/data/LowResourceLM/tweets/val.tsv.gz"
-data="/homes/ajaech/Downloads/scotus.tsv.gz"
-#data="/n/falcon/s0/ajaech/reddit.tsv.bz2"
-for path in exps/scotus*; do
+data="../data/smallreddit.tsv"
+for path in exps/*; do
     [ -d "${path}" ] || continue # if not a directory, skip
     dirname="$(basename "${path}")"
 
     cmd="./rnnlm.py --mode=eval $path --data=$data --threads 6 > $path/ppl.txt 2> $path/error.ppl.log"
+    # Skip files that have been evaluated more recently then the last checkpoint was saved
     if [ -f $path/ppl.txt ]; then        
         if test $path/model.bin -nt $path/ppl.txt; then
             echo "echo $dirname"
