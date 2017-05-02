@@ -256,13 +256,8 @@ class BaseModel(object):
       losses.append(nce_loss)
     return tf.pack(losses, 0), l1_losses
 
-  def ComputeLoss(self, reshaped_outputs, out_embeddings, user_embeddings=None,
-                  hash_func=None):
+  def ComputeLoss(self, reshaped_outputs, out_embeddings, hash_func=None):
     """Computes loss without sampling (full vocabulary)."""
-    if user_embeddings is not None:
-      replicated = tf.concat(0, [user_embeddings for _ in range(35)])
-      reshaped_outputs = tf.concat(1, [replicated, reshaped_outputs])
-
     reshaped_mask = tf.reshape(self._mask, [-1])
     reshaped_labels = tf.reshape(self.y, [-1])
 
