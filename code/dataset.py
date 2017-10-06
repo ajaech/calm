@@ -1,10 +1,13 @@
+# load, preprocess, and managage datasets
 import argparse
 import bz2
 import gzip
 import numpy as np
 import pandas
+import re
 
-import code
+from vocab import Vocab
+
 
 def GetFileHandle(filename):
   if filename.endswith('.bz2'):
@@ -17,6 +20,20 @@ def GetFileHandle(filename):
 def WordSplitter(text):
   text = text.replace('\n', ' ')
   return ['<S>'] + text.lower().split() + ['</S>']
+
+
+# This regex used to find special tokens in the Babel speech transcripts
+pattern = re.compile(r"(<[a-z\-]*>|\(\(\)\))")
+def SpeechSplitter(text):
+  segments = re.split(pattern, text)
+  result = ['<S>']
+  for seg in segments:
+    if re.match(pattern, seg):
+      result.append(seg)
+    else:
+      result += Vocab.Graphemes(seg)
+  result += ['</S>']
+  return result
 
 
 def CharSplitter(text):
@@ -38,6 +55,13 @@ def ReadData(filename, columns, limit):
   return data
 
 
+def ReadMultiple(filenames, columns, limit):
+    dfs = []
+    for filename in filenames:
+      dfs.append(ReadData(filename, columns, limit))
+    return pandas.concat(dfs)
+
+
 class Dataset(object):
 
   def __init__(self, max_len=35, batch_size=100, preshuffle=True, name='unnamed'):
@@ -55,27 +79,31 @@ class Dataset(object):
   def GetColumn(self, name):
     return self.data[name]
 
-  def ReadData(self, filename, columns, limit=10000000, mode='train', splitter='word'):
-    data = ReadData(filename, columns, limit)
+  def ReadData(self, filenames, columns, valdata=[], limit=10000000,
+               splitter='word', types=None):
+    SplitFunc = {'word': WordSplitter, 'char': CharSplitter,
+                 'speech': SpeechSplitter}[splitter]
 
-    SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
-
-    self.valdata = None
-    if mode == 'all' or mode == 'classify':
-      self.data = data
-      #self.valdata = ReadData('/g/ssli/data/LowResourceLM/tweets/val.tsv.gz',
-      #['lang', 'text'], limit)
-      #self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
-    else:
-      train_data = data[(data.index.values - 1) % 10 > 1]
-      eval_data = data[(data.index.values - 1) % 10 <= 1]
-      if mode == 'train':
-        self.data = train_data
-        self.valdata = eval_data.reset_index(drop=True)
-      elif mode == 'eval':
-        self.data = eval_data.reset_index(drop=True)
+    self.data = ReadMultiple(filenames, columns, limit)
+    if types:
+      for i, t in zip(columns, types):
+        if t == 'categorical':
+          self.data[i] = self.data[i].astype(str)
+        else:
+          self.data[i] = self.data[i].astype(float)
 
     self.data['text'] = self.data['text'].apply(SplitFunc)
+
+    self.valdata = None
+    if len(valdata) > 0:
+      self.valdata = ReadMultiple(valdata, columns, limit)
+      if types:
+        for i, t in zip(columns, types):
+          if t == 'categorical':
+            self.valdata[i] = self.valdata[i].astype(str)
+          else:
+            self.valdata[i] = self.valdata[i].astype(float)
+      self.valdata['text'] = self.valdata['text'].apply(SplitFunc)
 
     print 'loaded {0} sentences'.format(len(self.data))
 
@@ -110,9 +138,12 @@ class Dataset(object):
     df['text'] = df['text'].apply(
       lambda x: self.GetNumberLine(x, word_vocab, self._max_len))
     for context_var in context_vocabs:
+      if context_vocabs[context_var] == None:
+        continue  # skip numerical vars
       vocab = context_vocabs[context_var]
+      df['orig_{0}'.format(context_var)] = df[context_var]
       df[context_var] = df[context_var].apply(
-        lambda x: vocab[x])
+        lambda x: vocab.LookupIdx(x))
 
   def GetNumBatches(self):
     """Returns num batches per epoch."""
@@ -138,18 +169,16 @@ class Dataset(object):
 
     idx = range(self.current_val_idx, self.current_val_idx + self.batch_size)
     self.current_val_idx += self.batch_size
-    return self.data.iloc[idx]
+    return self.valdata.iloc[idx]
 
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--filename', default='/s0/ajaech/reddit.tsv.bz2')
-  parser.add_argument('--mode', choices=['train', 'eval'])
   parser.add_argument('--out')
   args = parser.parse_args()
 
-  data = ReadData(args.filename, mode=args.mode, columns=None,
-                  limit=None)
+  data = ReadData(args.filename, columns=None, limit=None)
   usernames = data[0]
   texts = data[2].apply(NgramSplitter)
   with open(args.out, 'w') as f:

@@ -1,3 +1,4 @@
+# code for loading, saving, and creating vocabularies
 import argparse
 import collections
 import numpy as np
@@ -11,16 +12,27 @@ class Vocab(object):
     self.vocab_size = len(tokenset)
     self.unk_symbol = unk_symbol
 
-    self.word_to_idx = dict(zip(sorted(tokenset),
-                                range(self.vocab_size)))
+    # make <UNK> be in the zero spot
+    all_tokens = sorted(tokenset)
+    if '<UNK>' in all_tokens:
+      idx = all_tokens.index('<UNK>')  # find the unk
+      if idx > 0:
+        all_tokens[0], all_tokens[idx] = '<UNK>', all_tokens[0]
+    self.word_to_idx = dict(zip(all_tokens, range(self.vocab_size)))
     self.idx_to_word = dict(zip(self.word_to_idx.values(),
                             self.word_to_idx.keys()))
 
-    self.token_counts = [token_counts[self.idx_to_word[i]] for i in
-                         range(self.vocab_size)]
+
+    if token_counts:
+      self.token_counts = [token_counts[self.idx_to_word[i]] for i in
+                           range(self.vocab_size)]
+    else:
+      self.token_counts = None
 
   def GetUnigramProbs(self):
-    return self.token_counts
+    if self.token_counts:
+      return np.array(self.token_counts) / float(sum(self.token_counts))
+    return None
 
   @staticmethod
   def Load(filename):
@@ -96,6 +108,45 @@ class Vocab(object):
       with open(filename, 'w') as f:
         for i in range(self.vocab_size):
           f.write('{0}\n'.format(self.idx_to_word[i]))
+    else:
+      print 'ERROR: bad file extension'
+
+  @staticmethod
+  def Graphemes(s):
+    """ Given a string return a list of graphemes.
+
+    Args:
+      s the input string
+
+    Returns:
+      A list of graphemes.
+    """
+    graphemes = []
+    current = []
+
+    if type(s) == unicode:
+      s = s.encode('utf8')
+
+    for c in s:
+      val = ord(c) & 0xC0
+      if val == 128:
+        # this is a continuation
+        current.append(c)
+      else:
+        # this is a new grapheme
+        if len(current) > 0:
+          graphemes.append(''.join(current))
+          current = []
+
+        if val < 128:
+          graphemes.append(c)  # single byte grapheme
+        else:
+          current.append(c)  # multi-byte grapheme
+
+    if len(current) > 0:
+      graphemes.append(''.join(current))
+
+    return graphemes
 
 
 if __name__ == '__main__':

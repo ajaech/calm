@@ -1,26 +1,22 @@
 {
-  "val_data": null,
-  "cell_size": 60,
-  "context_embed_sizes": [
-    21
-  ],
-  "nce_samples": 80,
-  "use_mikolov_adaptation": true,
-  "iters": 1000,
-  "dropout_keep_prob": 0.95,
-  "hash_table_size": 30000001,
-  "use_hyper_adaptation": true,
-  "batch_size": 10,
-  "embedding_dims": 40,
-  "max_len": 35,
-  "fixed_hyper": true,
-  "use_softmax_adaptation": false,
-  "use_hash_table": true,
-  "splitter": "word",
-  "context_vars": [
-    "subreddit"
-  ],
-  "context_embed_size": 20,
-  "learning_rate": 0.001,
-  "l1_penalty": 0.1    
+    "splitter": "word",
+    "context_embed_sizes": [5],
+    "nce_samples": 150, 
+    "cell_size": 164, 
+    "iters": 72000, 
+    "dropout_keep_prob": 1.0, 
+    "use_mikolov_adaptation": true, 
+    "use_lowrank_adaptation": true, 
+    "batch_size": 100, 
+    "embedding_dims": 114, 
+    "learning_rate": 0.001, 
+    "max_len": 150, 
+    "use_context_dependent_bias": true, 
+    "min_vocab_count": 8, 
+    "use_softmax_adaptation": false, 
+    "rank": 6, 
+    "use_hash_table": false, 
+    "context_vars": ["entitytype"],
+    "context_embed_size": null, 
+    "l1_penalty": 0.0 
 }

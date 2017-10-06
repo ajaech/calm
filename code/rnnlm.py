@@ -1,94 +1,101 @@
 #!/usr/bin/env python
 import argparse
-import bunch
 import collections
 import copy
 import gzip
-import json
 import logging
 import numpy as np
 import os
 import pandas
 import pickle
-import shutil
-import sys
+import random
 import tensorflow as tf
 import time
 
+from beam import BeamItem, BeamQueue
+from char2vec import MikolovEmbeddings, Char2Vec
 from model import HyperModel
 from vocab import Vocab
 from dataset import Dataset
+import helper
 import metrics
-
-import code
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('expdir', help='experiment directory')
 parser.add_argument('--mode', default='train',
-                    choices=['train', 'debug', 'eval', 'dump', 'classify'])
-parser.add_argument('--params', type=argparse.FileType('r'), 
+                    choices=['train', 'debug', 'eval', 'dump', 'classify',
+                             'uniclass', 'geoclass'])
+parser.add_argument('--params', type=str, 
                     help='json file with hyperparameters',
                     default='default_params.json')
 parser.add_argument('--vocab', type=str, help='predefined vocab', default=None)
-parser.add_argument('--data', type=str, 
-                    help='where to load the data',
-                    default='/n/falcon/s0/ajaech/reddit.tsv.bz2')
-parser.add_argument('--partition_override', type=bool, default=False,
-                    help='use to skip train/test partitioning')
+parser.add_argument('--data', type=str, action='append', dest='data',
+                    help='where to load the data')
+parser.add_argument('--valdata', type=str, action='append', dest='valdata',
+                    help='where to load validation data', default=[])
+parser.add_argument('--reverse', type=bool, default=False)
 parser.add_argument('--threads', type=int, default=12,
                     help='how many threads to use in tensorflow')
-parser.add_argument('--subreddit', type=str, default=None)
 args = parser.parse_args()
 
 if not os.path.exists(args.expdir):
   os.mkdir(args.expdir)
+elif args.mode == 'train':
+  print 'ERROR: expdir already exists!!!!'
+  exit()
 
-param_filename = os.path.join(args.expdir, 'params.json')
+tf.set_random_seed(int(time.time() * 1000))
 
-if args.mode == 'train':
-  param_dict = json.load(args.params)
-  params = bunch.Bunch(param_dict)
-  with open(param_filename, 'w') as f:
-    json.dump(param_dict, f)
-else:
-  with open(param_filename, 'r') as f:
-    params = bunch.Bunch(json.load(f))
-args.params.close()
-
+params = helper.GetParams(args.params, args.mode, args.expdir)
 config = tf.ConfigProto(inter_op_parallelism_threads=args.threads,
                         intra_op_parallelism_threads=args.threads)
 
-batch_size = params.batch_size
+if not hasattr(params, 'context_var_types'):
+  params.context_var_types = ['categorical'] * len(params.context_vars)
+
 if args.mode != 'train':
-  params.batch_size = 20
+  params.batch_size = 5
+if args.mode == 'debug':
+  params.batch_size = 1
 
 SEPERATOR = ' '
 if params.splitter == 'char':
   SEPERATOR = ''
+params.hash_entries_filename = os.path.join(args.expdir, 'hash_entries.txt.gz')
 
-if args.mode in ('train', 'eval', 'classify'):
+if args.mode in ('train', 'eval', 'classify', 'uniclass', 'geoclass'):
   mode = args.mode
-  if args.partition_override:
-    mode = 'all'
 
   dataset = Dataset(max_len=params.max_len + 1, 
                     preshuffle=args.mode=='train',
                     batch_size=params.batch_size)
   print 'reading data'
   dataset.ReadData(args.data, params.context_vars + ['text'],
-                   mode=mode, splitter=params.splitter)
+                   splitter=params.splitter,
+                   valdata=args.valdata, types=params.context_var_types)
 
 if args.mode == 'train':
+  # do the word vocab
   if args.vocab is not None:
     vocab = Vocab.Load(args.vocab)
   else:
-    min_count = 20
-    if hasattr(params, 'min_vocab_count'):
-      min_count = params.min_vocab_count
-    vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=min_count)
-  context_vocabs = {}
-  for context_var in params.context_vars:
+    vocab = Vocab.MakeFromData(dataset.GetColumn('text'), min_count=params.min_vocab_count)
+
+  if params.splitter == 'word':  # do the character vocab
+    graphemes = [['{'] + Vocab.Graphemes(x) + ['}'] for x in vocab.GetWords()]
+    char_vocab = Vocab.MakeFromData(graphemes, min_count=1)
+    char_vocab.Save(os.path.join(args.expdir, 'char_vocab.pickle'))
+  else:
+    char_vocab = None
+
+  context_vocabs = {}  # do the context vocabs
+  for i, context_var in enumerate(params.context_vars):
+    # skip numerical vocabularies
+    if hasattr(params, 'context_var_types') and params.context_var_types[i] == 'numerical':
+      context_vocabs[context_var] = None
+      continue
+
     v = Vocab.MakeFromData([[u] for u in dataset.GetColumn(context_var)],
                            min_count=50, no_special_syms=True)
     context_vocabs[context_var] = v
@@ -98,28 +105,52 @@ if args.mode == 'train':
   print 'vocab size {0}'.format(len(vocab))
   with open(os.path.join(args.expdir, 'context_vocab.pickle'), 'wb') as f:
     pickle.dump(context_vocabs, f)
+
+  dataset.Prepare(vocab, context_vocabs)
+
+  if params.use_hash_table:   # prepare the hash table
+    with gzip.open(params.hash_entries_filename, 'w') as f:
+      for context_var in params.context_vars:
+        grps = dataset.data.groupby(context_var)
+        for s_id, grp in grps:
+          unigrams = np.unique(list(grp.text.values))
+          context_name = context_vocabs[context_var][s_id]
+          for w in unigrams:
+            f.write('{0}~{1}\n'.format(vocab[w], context_name))
 else:
   vocab = Vocab.Load(os.path.join(args.expdir, 'word_vocab.pickle'))
+  if params.splitter == 'word':
+    char_vocab = Vocab.Load(os.path.join(args.expdir, 'char_vocab.pickle'))
+  else:
+    char_vocab = None
   with open(os.path.join(args.expdir, 'context_vocab.pickle'), 'rb') as f:
     context_vocabs = pickle.load(f)
 
 
-unigram_probs = vocab.GetUnigramProbs()
-use_nce_loss = (args.mode == 'train') 
-if len(unigram_probs) < 5000:  # disable NCE for small vocabularies
+use_nce_loss = args.mode == 'train'
+if len(vocab) < 5000:  # disable NCE for small vocabularies
   use_nce_loss = False
-if args.mode == 'classify':
+if args.mode == 'classify' and len(vocab) > 5000:
   use_nce_loss = True
-  params.nce_samples = 400
-model = HyperModel(
-  params, unigram_probs,
-  [len(context_vocabs[v]) for v in params.context_vars], 
-  use_nce_loss=use_nce_loss)
+  params.nce_samples = 8000
 
-saver = tf.train.Saver(tf.all_variables())
+embedder = 'mikolov'
+if hasattr(params, 'embedder'):
+  embedder = params.embedder
+if embedder == 'mikolov':
+  word_embedder = MikolovEmbeddings(params, vocab)
+else:
+  word_embedder = Char2Vec(params, vocab, char_vocab)
+model = HyperModel(
+  params, vocab,  context_vocabs,
+  use_nce_loss=use_nce_loss, reverse=args.reverse, exclude_unk=True, 
+  word_embedder=word_embedder)
+
+saver = tf.train.Saver(tf.global_variables())
 session = tf.Session(config=config)
 
 def GetFeedDict(batch, use_dropout=True):
+  # helper function to prepare feed dict for batch
   s = np.array(list(batch.text.values))  # hacky
   feed_dict = {
     model.word_ids: s,
@@ -133,34 +164,28 @@ def GetFeedDict(batch, use_dropout=True):
       feed_dict[placeholder] = batch[context_var].values
 
   if not use_dropout:
+    # if dropout is removed from feed_dict then it will be turned off
     del feed_dict[model.dropout_keep_prob]
 
   return feed_dict                
   
 
 def Train(expdir):
-  dataset.Prepare(vocab, context_vocabs)
-
+  """This function performs training."""
   logging.basicConfig(filename=os.path.join(expdir, 'logfile.txt'),
                       level=logging.INFO)
+  logging.getLogger().addHandler(logging.StreamHandler())
+
+  # have to create the optimzier after initializing the hash table
   tvars = tf.trainable_variables()
   grads, _ = tf.clip_by_global_norm(tf.gradients(model.cost, tvars), 5.0)
-  optimizer = tf.train.AdamOptimizer(params.learning_rate)
+  optimizer = tf.train.AdamOptimizer(0.001)
   train_op = optimizer.apply_gradients(zip(grads, tvars))
 
   print('initalizing')
-  session.run(tf.initialize_all_variables())
-
-  # prepare the bloom filter
   if params.use_hash_table:
-    print('preparing bloom filter')
-    for context_var in params.context_vars:
-      grps = dataset.data.groupby(context_var)
-      for s_id, grp in grps:
-        unigrams = np.unique(list(grp.text.values))
-        session.run(model.bloom_updates[context_var],
-                    {model.context_bloom_ids[context_var]: np.array(s_id),
-                     model.selected_ids: unigrams})
+    model.myhash.init.run(session=session)
+  session.run(tf.global_variables_initializer())
 
   avgcost = metrics.MovingAvg(0.90)
   start_time = time.time()
@@ -168,254 +193,308 @@ def Train(expdir):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=True)
 
-    cost, _ = session.run([model.cost, train_op], feed_dict)
+    cost,  _ = session.run([model.cost, train_op], feed_dict)
+    c = avgcost.Update(cost)
 
-    if idx % 40 == 0:
+    if idx % 40 == 0:  # every 40th batch, run one batch from the validation set
       end_time = time.time()
       time_diff = end_time - start_time
       start_time = end_time
-      batches_per_second = time_diff / 40
-      print 'batches per second {0:.3f}'.format(batches_per_second)
+      seconds_per_batch = time_diff / 40
+      print 'seconds per batch {0}'.format(seconds_per_batch)
 
       feed_dict = GetFeedDict(dataset.GetValBatch(), use_dropout=False)
       val_cost = session.run(model.cost, feed_dict)
-      print idx, cost
-      logging.info({'iter': idx, 'cost': avgcost.Update(cost),
-                    'rawcost': cost, 'valcost': val_cost})
 
-    if idx % 500 == 0:
-      saver.save(session, os.path.join(expdir, 'model.bin'))
+      print idx, cost
+      logging.info({'iter': idx, 'cost': c, 'rawcost': cost, 'valcost': val_cost})
+
+    if idx % 500 == 0:  # save the model every 500 minibatches
+      saver.save(session, os.path.join(expdir, 'model.bin'),
+                 write_meta_graph=False)
 
 
 def DumpEmbeddings(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  #word = model._word_embeddings.eval(session=session)
-  word = model.context_embeddings['subreddit'].eval(session=session)
+  word = model.word_embedder.GetAllEmbeddings().eval(session=session)
   with gzip.open(os.path.join(expdir, 'embeddings.tsv.gz'), 'w') as f:
-    for w in word:
+    for idx, w in enumerate(word):
+      f.write(vocab[idx])
+      f.write('\t')
       f.write('\t'.join(['{0:.3f}'.format(i) for i in w]))
       f.write('\n')
 
 
-def CheckHash(expdir):
+def ContextBias(expdir):
+  # used for model introspection
   saver.restore(session, os.path.join(expdir, 'model.bin'))
-  context_var = 'person'
-  hash_val, hash_idx, bloom = model.HashGetter(
-    model.all_ids, 
-    {context_var: model.context_bloom_ids[context_var]},
-    debug=True)
+  context_bias = tf.trainable_variables()[2].eval(session=session)
   
-  data = []
-  sublist = context_vocabs[context_var].GetWords()
-  for subname in sublist:
-    print subname
-    _hash_val, _hash_idx, _bloom = session.run([hash_val, hash_idx, bloom], 
-                                               {model.context_bloom_ids[context_var]: 
-                                                context_vocabs[context_var][subname]})
-    for i in range(len(_hash_val)):
-      if _bloom[i] != 0.0:
-        data.append({'word': vocab[i], context_var: subname, 
-                     'hash': _hash_val[i], 'hash_idx': _hash_idx[i]})
-  df = pandas.DataFrame(data)
-  df = df.sort_values('hash')
-  code.interact(local=locals())
-  
+  for i in range(context_bias.shape[1]):
+    z = context_bias[:, i]
+    vals = np.argsort(z)
+    print '~~~{0}~~~'.format(context_vocabs[params.context_vars[0]][i])
+    topwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[-10:]]
+    bottomwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[:10]]
+    print ' '.join(reversed(topwords))
+    print ' '.join(bottomwords)
 
 
 def Debug(expdir):
-  saver.restore(session, os.path.join(expdir, 'model.bin'))
   metrics.PrintParams()
-
-  context_var = 'subreddit'
-  context_idx = params.context_vars.index(context_var)
-  context_vocab = context_vocabs[context_var]
-  subnames = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'nba', 'worldnews',
-              'math', 'Seattle', 'science', 'WTF', 'malefashionadvice', 'programming',
-              'pittsburgh', 'cars', 'hockey', 'buildapc']
-  #subnames = context_vocab.GetWords()
-  
   if params.use_hash_table:
-    hash_val = model.HashGetter(
-      model.all_ids, 
-      {context_var: model.context_bloom_ids[context_var]})
+    model.myhash.init.run(session=session)
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
 
+  context_var = params.context_vars[0]
+  context_vocab = context_vocabs[context_var]
+  subnames = context_vocab.GetWords()
+
+  if params.use_hash_table or params.use_context_dependent_bias:
+    context_placeholder = tf.placeholder(tf.int64, [None])
+    hash_val = model.HashGetter(model.all_ids, 
+                                {context_var: context_placeholder})
+                                  
     def Process(subname):
-      z = session.run(hash_val, {model.context_bloom_ids[context_var]: context_vocab[subname]})
+
+      if params.use_context_dependent_bias:
+        table = model.bias_tables[context_var]
+        z = session.run(table[:, context_vocab[subname]])
+      else:
+        z = session.run(hash_val, {context_placeholder: 
+                                   [context_vocab[subname]] * len(vocab)})
+        
       vals = z.argsort()
-      topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], z[vals[-1-i]]) for i in range(10)]
-      print ' '.join(topwords)
+      topwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[-10:]]
+      bottomwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[:10]]
+      print ' '.join(reversed(topwords))
+      print ' '.join(bottomwords)
 
     for subname in subnames:
       print subname
       Process(subname)
 
-  def Process(s, subname):
+  def Process(s):
     s = np.squeeze(s.T)
     vals = s.argsort()
 
-    print '~~~{0}~~~'.format(subname)
     topwords = ['{0} {1:.2f}'.format(vocab[vals[-1-i]], s[vals[-1-i]])
                 for i in range(10)]
     print ' '.join(topwords)
 
-  Process(model.base_bias.eval(session=session), 'basebias')
+  Process(model.base_bias.eval(session=session))
 
   if not params.use_softmax_adaptation:
     return  # nothing else to do here
 
-  uword = model._word_embeddings[:, :params.context_embed_sizes[context_idx]]
-  subreddit = tf.placeholder(tf.int32, ())
-  scores = tf.matmul(uword, tf.expand_dims(model.context_embeddings[context_var][subreddit, :], 1))
-    
-  for subname in subnames:
-    s = session.run(scores, {subreddit: context_vocabs[context_var][subname]})
-    Process(s, subname)
+  uword = word_embedder.GetAllEmbeddings()[:, :model.context_size]
+  scores = tf.matmul(uword, model.final_context_embed, transpose_b=True)
+
+  for _ in range(10):
+    fd = {}
+    GetRandomSetting(fd, {'offering': 'loc_124264'}, print_it=True)
+    s = session.run(scores, fd)
+    Process(s)
+    Process(-s)
+    print '~~~~~~~~~~~~~~~~~~~~~~~~~~'
 
 
-class BeamItem(object):
-  """Helper class for beam search."""
+def GetRandomSetting(feed_dict=None, fixed_context={}, print_it=False):
+  # choose a random context, useful for debugging
+  if print_it:
+    print '~' * 40
+  context_settings={}
+  for context_var, context_type in zip(params.context_vars, params.context_var_types):
+    context_vocab = context_vocabs[context_var]
+    if context_var in fixed_context:
+      selection = fixed_context[context_var]
+    else:
+      if context_type == 'categorical':
+        selection = '<UNK>'
+        while selection == '<UNK>':
+          selection = context_vocab[np.random.randint(len(context_vocab))]
+      else:
+        selection = 1.0
+    context_settings[context_var] = selection
+    if print_it:
+      print '{0}:\t{1}'.format(context_var, selection)
   
-  def __init__(self, prev_word, prev_c, prev_h):
-    self.log_probs = [0.0]
-    self.words = [prev_word]
-    self.prev_c = prev_c
-    self.prev_h = prev_h
+  if feed_dict is None:
+    return context_settings
 
-  def Update(self, log_prob, new_word, new_c, new_h):
-    self.prev_c = new_c
-    self.prev_h = new_h
-    self.words.append(new_word)
-    self.log_probs.append(log_prob)
+  if hasattr(model, 'context_placeholders'):
+    for context_var in params.context_vars:
+      context_vocab = context_vocabs[context_var]
+      placeholder = model.context_placeholders[context_var]
+      if context_vocab:
+        feed_dict[placeholder] = np.array([context_vocab[context_settings[context_var]]])
+      else:
+        feed_dict[placeholder] = np.array([context_settings[context_var]])
 
-  def Cost(self):
-    return sum(self.log_probs)
 
+def InitBeam(phrase, settings):
+  # helper function to start beam search with a prefix phrase
+  prev_c = np.zeros((1, params.cell_size))
+  prev_h = np.zeros((1, params.cell_size))
+  for word in phrase[:-1]:
+    feed_dict = {model.prev_c: prev_c, model.prev_h: prev_h,
+       model.prev_word: vocab[word], model.beam_size: 4}
+    GetRandomSetting(feed_dict, settings, print_it=False)
+    prev_c, prev_h = session.run(
+      [model.next_c, model.next_h], feed_dict)
+
+  return prev_c, prev_h
 
 def BeamSearch(expdir):
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  context = {'lang': 'en'}
+  context = {'rating': random.choice(['5_stars', '1_stars', '2_stars', '4_stars']), 'subreddit': '5_stars',
+              'offering': random.choice(['loc_76049', 'loc_1218737', 'loc_77094', 'loc_1776857'])}
+  context = {}
+  settings = GetRandomSetting(None, context, print_it=True)
 
   # initalize beam
-  beam_size = 10
-  total_beam_size = 40
-  beam_items = [BeamItem('<S>', np.zeros((1, params.cell_size)), 
-                         np.zeros((1, params.cell_size)))]
+  starting_phrase = random.choice([
+    '<S> the bed was',
+    '<S> the location was',
+    '<S> i stayed here on a business trip and',
+    '<S> our room was',
+    '<S> we could not believe',
+    '<S> when i arrived at the hotel']).split()
+  beam_size = 8
+  total_beam_size = 200
+  init_c, init_h = InitBeam(starting_phrase, settings)
+  nodes = [BeamItem(starting_phrase, init_c, init_h)]
 
-  for i in xrange(params.max_len):
-    new_beam_items = []
-    for beam_item in beam_items:
-      if beam_item.words[-1] == '</S>':  # don't extend past end-of-sentence token
-        new_beam_items.append(beam_item)
+  for i in xrange(80):
+    new_nodes = BeamQueue(max_size=total_beam_size)
+    for node in nodes:
+      if node.words[-1] == '</S>':  # don't extend past end-of-sentence token
+        new_nodes.Insert(node)
         continue
 
       feed_dict = {
-        model.prev_word: vocab[beam_item.words[-1]],
-        model.prev_c: beam_item.prev_c,
-        model.prev_h: beam_item.prev_h
+        model.prev_word: vocab[node.words[-1]],
+        model.prev_c: node.prev_c,
+        model.prev_h: node.prev_h,
+        model.beam_size: beam_size,
       }
-      if hasattr(model, 'context_placeholders'):
-        for context_var in params.context_vars:
-          placeholder = model.context_placeholders[context_var]
-          if context_var in context:
-            feed_dict[placeholder] = np.array(
-              [context_vocabs[context_var][context[context_var]]])
-          else:
-            feed_dict[placeholder] = np.array([0])
+      GetRandomSetting(feed_dict, settings, print_it=False)
 
-      a = session.run([model.next_prob, model.next_c, model.next_h], feed_dict)
-      current_prob, prevstate_c, prevstate_h = a
+      current_word_id, current_word_p, node.prev_c, node.prev_h = session.run(
+        [model.selected, model.selected_p, model.next_c, model.next_h], feed_dict)
+      current_word_p = np.squeeze(current_word_p)
+      if len(current_word_p.shape) == 0:
+        current_word_p = [float(current_word_p)]
 
-      top_entries = []
-      top_values = []
-      cumulative = np.cumsum(current_prob)
-      num_tries = 0
-      while len(top_entries) < beam_size:
-        num_tries += 1
-        current_word_id = np.argmin(cumulative < np.random.rand())
-        if num_tries > 500:  # some times there are not enough words to add
-          break
-        if current_word_id not in top_entries:
-          top_entries.append(current_word_id)
-          top_values.append(current_prob[0, current_word_id])
-      """
-      top_entries = np.argsort(current_prob)[0, -beam_size:]
-      top_values = current_prob[0, top_entries]
-      """
-      for top_entry, top_value in zip(top_entries, top_values):
-        new_beam = copy.deepcopy(beam_item)
+      for top_entry, top_value in zip(current_word_id, current_word_p):
         new_word = vocab[top_entry]
-        if new_word != '<UNK>':
-          new_beam.Update(-np.log(top_value), vocab[top_entry], prevstate_c, prevstate_h)
-          new_beam_items.append(new_beam)
-      new_beam_items = sorted(new_beam_items, key=lambda x: x.Cost())
-      beam_items = new_beam_items[:total_beam_size]
-  for item in beam_items:
+        if new_word != '<UNK>' and node.IsEligible(new_word):
+          log_p = -np.log(top_value)
+
+          # check the bound to see if we can avoid adding this to the queue
+          if new_nodes.CheckBound(log_p + node.Cost()):
+            new_beam = copy.deepcopy(node)
+            new_beam.Update(log_p, vocab[top_entry])
+            new_nodes.Insert(new_beam)
+    nodes = new_nodes
+  for item in reversed([b for b in nodes][-4:]):
     print item.Cost(), SEPERATOR.join(item.words)
 
 
-def Greedy(expdir):
+def UnigramClassify(expdir):
+  # turn the model into a linear classifier by using the softmax bias
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
+  probs = tf.nn.softmax(model.base_bias + 
+                        tf.transpose(model.bias_tables['subreddit']))
+  log_probs = tf.log(probs).eval(session=session)
+  
+  lang_vocab = context_vocabs['subreddit']
+  vocab_subset = lang_vocab.GetWords()
+
+  print 'preparing dataset'
+  dataset.Prepare(vocab, context_vocabs)
+
+  preds = []
+  labels = []
+  for pos in xrange(dataset.GetNumBatches()):
+    if pos % 10 == 0:
+      print pos
+    batch = dataset.GetNextBatch()
+    
+    for i in xrange(len(batch)):
+      row = batch.iloc[i]
+      scores = np.zeros(len(vocab_subset))
+
+      for word_id in row.text[1:row.seq_lens]:
+        scores += log_probs[:, word_id]
+      preds.append(np.argmax(scores))
+      labels.append(row['subreddit'])
+  metrics.Metrics([lang_vocab[i] for i in preds],
+                  [lang_vocab[i] for i in labels])
+
+
+def GeoClassify(expdir):
+  # classify tweets based on lat/long context
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(varname, subname):
-    # select random context settings
-    context_settings = {}
-    for context_var in params.context_vars:
-      context_vocab = context_vocabs[context_var]
-      selection = np.random.randint(len(context_vocab))
-      context_settings[context_var] = selection
-      if varname not in params.context_vars:
-        print context_vocab[selection]
+  print 'preparing dataset'
+  dataset.Prepare(vocab, context_vocabs)
 
-    feed_dict = {                      
-      model.prev_word: vocab['<S>'],
-      model.prev_c: np.zeros((1, params.cell_size)),
-      model.prev_h: np.zeros((1, params.cell_size)),
-    }
-    if hasattr(model, 'context_placeholders'):
-      for context_var in params.context_vars:
-        placeholder = model.context_placeholders[context_var]
-        if context_var == varname:
-          feed_dict[placeholder] = np.array([context_vocabs[context_var][subname]])
-        else:
-          feed_dict[placeholder] = np.array([context_settings[context_var]])
+  classes = [
+    {'lat': 40.4, 'lon': -3.7},  #madrid
+    {'lat': 51.5, 'lon': -0.23},  # london
+    {'lat': 40.7, 'lon': -74.0},  # nyc
+    {'lat': 41.4, 'lon': 2.17},  # barcelona
+    {'lat': 34.05, 'lon': -118.2},  # los angeles
+    {'lat': 53.5, 'lon': -2.2}  # manchester
+  ]
+  names = ['madrid', 'london', 'nyc', 'barcelona', 'la', 'manchester']
 
-    word_ids, word_probs, next_prob = session.run([model.selections, model.selected_ps, model.next_prob], feed_dict)
+  results = []
+  all_labels = []
+  all_preds = []
+  for pos in xrange(dataset.GetNumBatches()):
+    if pos % 10 == 0:
+      print pos
+    batch = dataset.GetNextBatch()
+    feed_dict = GetFeedDict(batch, use_dropout=False)
+    labels = []
+    for lat, lon in zip(feed_dict[model.context_placeholders['lat']],
+                        feed_dict[model.context_placeholders['lon']]):
+      closest_dist = 300
+      closest_class = -1
+      for i in range(len(names)):
+        d = helper.haversine(lon, lat, classes[i]['lon'], classes[i]['lat'])
+        if d < closest_dist:
+          closest_dist = d
+          closest_class = names[i]
+      labels.append(closest_class)
+    labels = np.array(labels)
 
-    log_probs = []
-    words = []
-    for current_word_id, current_word_p in zip(word_ids, word_probs):
-      log_probs.append(-np.log(current_word_p))
-      current_word = vocab[current_word_id]
-      words.append(current_word)
-      if '</S>' in current_word:
-        break
-    ppl = np.exp(np.mean(log_probs))
-    return ppl, SEPERATOR.join(words)
-    
-  sample_list = ['exmormon', 'AskWomen', 'todayilearned', 'nfl', 'worldnews',
-                 'math', 'Seattle', 'science', 'WTF', 'malefashionadvice',
-                 'pittsburgh', 'cars', 'hockey', 'programming', 'Music']
-  for n in sample_list:
-    print '~~~{0}~~~'.format(n)
-    for idx in range(4):
-      ppl, sentence = Process('subreddit', n)
-      print '{0:.2f}\t{1}'.format(ppl, sentence)
+    costs = []
+    for i in range(len(names)):
+      feed_dict[model.context_placeholders['lat']][:] = classes[i]['lat']
+      feed_dict[model.context_placeholders['lon']][:] = classes[i]['lon']
+      costs.append(session.run(model.per_sentence_loss, feed_dict))
+    costs = np.array(costs)
 
+    predictions = np.argmin(costs, 0)
+    for p, l in zip(np.squeeze(predictions), labels):
+      if l != '-1':
+        all_preds.append(p)
+        all_labels.append(l)
+  metrics.Metrics([names[i] for i in all_preds], all_labels)
 
 def Classify(expdir):
-  print 'loading model'
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  context_var = 'person'
+  context_var = params.context_vars[-1]
   placeholder = model.context_placeholders[context_var]
   lang_vocab = context_vocabs[context_var]
-  #vocab_subset = lang_vocab.GetWords()
-  vocab_subset = ['antonin_scalia', 'john_paul_stevens', 'anthony_kennedy',
-       'david_h_souter', 'william_h_rehnquist', 'stephen_g_breyer',
-       'sandra_day_oconnor', 'ruth_bader_ginsburg',
-       'samuel_a_alito_jr', 'sonia_sotomayor', 'john_g_roberts_jr']
+  vocab_subset = [w for w in lang_vocab.GetWords() if w != '<UNK>']
+  print vocab_subset
 
   print 'preparing dataset'
   dataset.Filter(vocab_subset, context_var)
@@ -424,127 +503,156 @@ def Classify(expdir):
   results = []
   all_labels = []
   all_preds = []
-  for pos in xrange(min(dataset.GetNumBatches(), 200)):
+  for pos in xrange(dataset.GetNumBatches()):
     if pos % 10 == 0:
       print pos
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
-    langs = feed_dict[placeholder]
+    labels = np.array(feed_dict[placeholder])
 
-    costs = []
-    labels = np.array(langs)
-    for i in range(len(vocab_subset)):
-      feed_dict[placeholder][:] = lang_vocab[vocab_subset[i]]
-    
-      sentence_costs =  session.run(model.per_sentence_loss, feed_dict)
-      costs.append(sentence_costs)
+    def GetCosts():
+      costs = []
+      if use_nce_loss:
+        feed_dict[placeholder][:] = lang_vocab[vocab_subset[0]]
+        result = session.run([model.per_sentence_loss] + model.sampled_values, feed_dict)
+        sentence_costs, sampled_vals = result[0], result[1:]
+        costs.append(sentence_costs)
+        # reuse the sampled values
+        for i in range(len(model.sampled_values)):
+          feed_dict[model.sampled_values[i][0]] = sampled_vals[i][0]
+          feed_dict[model.sampled_values[i][1]] = sampled_vals[i][1]
+          feed_dict[model.sampled_values[i][2]] = sampled_vals[i][2]
 
-    for label, c_array in zip(labels, np.array(costs).T):
+        for i in range(1, len(vocab_subset)):
+          feed_dict[placeholder][:] = lang_vocab[vocab_subset[i]]
+          costs.append(session.run(model.per_sentence_loss, feed_dict))
+      else:  # full softmax
+        for i in range(len(vocab_subset)):
+          feed_dict[placeholder][:] = lang_vocab[vocab_subset[i]]
+          costs.append(session.run(model.per_sentence_loss, feed_dict))
+        
+      return np.array(costs)
+
+    costs = GetCosts()
+    for label, c_array in zip(labels, costs.T):
       d = dict(zip(vocab_subset, c_array))
       d['label'] = lang_vocab[label]
       results.append(d)
 
-    predictions = np.argmin(np.array(costs), 0)
-    all_preds += list(predictions)
+    predictions = np.argmin(costs, 0)
+    all_preds += [lang_vocab[vocab_subset[x]] for x in predictions]
     all_labels += list(labels)
+  
   df = pandas.DataFrame(results)
   df.to_csv(os.path.join(expdir, 'classify.csv'))
-  #metrics.Metrics([lang_vocab[i] for i in all_preds],
-  #                [lang_vocab[i] for i in all_labels])
+  metrics.Metrics([lang_vocab[i] for i in all_preds],
+                  [lang_vocab[i] for i in all_labels])
 
 
 def Eval(expdir):
+  # compute the perplexity
   dataset.Prepare(vocab, context_vocabs)
   num_batches = dataset.GetNumBatches()
 
   print 'loading model'
+  if params.use_hash_table:
+    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   total_word_count = 0
   total_log_prob = 0
   results = []
-  for pos in xrange(min(dataset.GetNumBatches(), 3000)):
+  for pos in xrange(dataset.GetNumBatches()):
     batch = dataset.GetNextBatch()
     feed_dict = GetFeedDict(batch, use_dropout=False)
-
-    cost, sentence_costs = session.run([model.cost, model.per_sentence_loss], feed_dict)
     lens = feed_dict[model.seq_len]
+
+    cost, sentence_costs = session.run([model.cost, model.per_sentence_loss],
+                                       feed_dict)
 
     for length, idx, sentence_cost in zip(lens, batch.index, sentence_costs):
       batch_row = batch.loc[idx]
       data_row = {'length': length, 'cost': sentence_cost}
       for context_var in params.context_vars:
-        data_row[context_var] = context_vocabs[context_var][batch_row[context_var]]
-
+        if context_vocabs[context_var]:
+          data_row[context_var] = batch_row['orig_{0}'.format(context_var)]
+        else:
+          data_row[context_var] = batch_row[context_var]
       results.append(data_row)
 
-    words_in_batch = sum(feed_dict[model.seq_len] - 1)
+    words_in_batch = sum(lens - 1)
     total_word_count += words_in_batch
     total_log_prob += float(cost * words_in_batch)
-    ppl = np.exp(total_log_prob / total_word_count)
-    print '{0}\t{1:.3f}'.format(pos, ppl)
-  
+    print '{0}\t{1:.3f}'.format(pos, np.exp(total_log_prob / total_word_count))
+
   results = pandas.DataFrame(results)
   results.to_csv(os.path.join(expdir, 'pplstats.csv.gz'), compression='gzip')
+  
 
-
-def OldGreedy(expdir):
+def TopNextProbs(expdir):
+  if params.use_hash_table:
+    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
-  def Process(fixed_context, greedy=True):
-    current_word = '<S>'
-    prevstate_h = np.zeros((1, params.cell_size))
-    prevstate_c = np.zeros((1, params.cell_size))
+  words = '<S> the'.split()
+  prevstate_h = np.zeros((1, params.cell_size))
+  prevstate_c = np.zeros((1, params.cell_size))
 
-    # select random context settings
-    context_settings = {}
-    for context_var in params.context_vars:
-      context_vocab = context_vocabs[context_var]
-      if context_var in fixed_context:
-        selection = context_vocab[fixed_context[context_var]]
-      else:
-        selection = np.random.randint(len(context_vocab))
-      context_settings[context_var] = selection
+  fixed_context = {'rating': 'five'}
+  fixed_context = GetRandomSetting(None, fixed_context, print_it=True)
 
-    words = []
-    log_probs = []
-    for i in xrange(30):
-      feed_dict = {                      
-        model.prev_word: vocab[current_word],
-        model.prev_c: prevstate_c,
-        model.prev_h: prevstate_h,
-      }
-      if hasattr(model, 'context_placeholders'):
-        for context_var in params.context_vars:
-          placeholder = model.context_placeholders[context_var]
-          feed_dict[placeholder] = np.array([context_settings[context_var]])
+  for current_word in words:
+    feed_dict = {
+      model.prev_word: vocab[current_word],
+      model.prev_c: prevstate_c,
+      model.prev_h: prevstate_h
+    }
+    GetRandomSetting(feed_dict, fixed_context)
 
-      if greedy:
-        a = session.run([model.next_prob, model.next_c, model.next_h],
-                        feed_dict)
-        current_prob, prevstate_c, prevstate_h = a
-        current_word_id = np.argmax(current_prob)
-        log_probs.append(-np.log(current_prob.max()))
-        current_word = vocab[current_word_id]
-        words.append(current_word)
-      else:
-        a = session.run([model.selected, model.selected_p,
-                         model.next_c, model.next_h], feed_dict)
-        current_word_id, current_word_p, prevstate_c, prevstate_h = a
-        log_probs.append(-np.log(current_word_p))
-        current_word = vocab[current_word_id]
-        words.append(current_word)
-      if '</S>' in current_word:
-        break
-    ppl = np.exp(np.mean(log_probs))
-    return ppl, SEPERATOR.join(words)
+    next_prob, prevstate_c, prevstate_h = session.run(
+      [model.next_prob, model.next_c, model.next_h], feed_dict)
+  next_prob = np.squeeze(next_prob)
+  idx = np.argsort(-next_prob)
+  for ii in idx[:10]:
+    print '{0}\t{1:.2f}%'.format(vocab[ii], next_prob[ii] * 100.0)
+
+
+def Process(fixed_context, greedy=True):
+  fixed_context = GetRandomSetting(None, fixed_context, print_it=True)
+  session.run(model.reset_state)
+  current_word = '<S>'
+
+  words = []
+  log_probs = []
+  words.append(current_word)
+  feed_dict = {                      
+    model.prev_word: vocab[current_word],
+    model.temperature: [0.6]
+  }
+  GetRandomSetting(feed_dict, fixed_context)
+  for i in range(50):
+    current_word_id, current_word_p = session.run(
+      [model.selected, model.selected_p], feed_dict)
+    log_probs.append(-np.log(current_word_p))
+    current_word = vocab[current_word_id[0][0]]
+    words.append(current_word)
+  
+    if current_word == '</S>':
+      break
+    feed_dict[model.prev_word] = vocab[current_word]
+
+  ppl = np.exp(np.mean(log_probs))
+  return ppl, SEPERATOR.join(words)
+
+
+def Greedy(expdir):
+  if params.use_hash_table:
+    model.myhash.init.run(session=session)
+  saver.restore(session, os.path.join(expdir, 'model.bin'))
     
-  for idx in range(50000):
-    fixed_context = {'subreddit': args.subreddit}
-    ppl, sentence = Process(fixed_context, greedy=idx==0)
-    #print '{0:.2f}\t{1}'.format(ppl, sentence)
-    print sentence
-
+  for idx in range(20000):
+    ppl, sentence = Process({}, greedy=True)
+    print '{0:.3f}\t{1}'.format(ppl, sentence)
 
 if args.mode == 'train':
   Train(args.expdir)
@@ -554,13 +662,22 @@ if args.mode == 'eval':
 
 if args.mode == 'classify':
   Classify(args.expdir)
+if args.mode == 'uniclass':
+  UnigramClassify(args.expdir)
+if args.mode == 'geoclass':
+  GeoClassify(args.expdir)
 
 if args.mode == 'debug':
-  #CheckHash(args.expdir)
-  #Debug(args.expdir)
-  BeamSearch(args.expdir)
-  #OldGreedy(args.expdir)
-  
 
+  session.run([model.prev_c.initializer, model.prev_h.initializer])
+
+  #ContextBias(args.expdir)
+  #Debug(args.expdir)
+  for _ in range(500):
+    BeamSearch(args.expdir)
+  
+  #TopNextProbs(args.expdir)
+  #Greedy(args.expdir)
+  
 if args.mode == 'dump':
   DumpEmbeddings(args.expdir)

@@ -3,6 +3,7 @@ import sys
 
 import numpy as np
 import tensorflow as tf
+from sklearn import linear_model
 
 
 def Metrics(preds, labs, show=True):
@@ -19,12 +20,20 @@ def Metrics(preds, labs, show=True):
   label_totals = collections.Counter(labs)
   pred_totals = collections.Counter(preds)
   confusion_matrix = collections.Counter(zip(preds, labs))
+
+  for (pred, lab), count in confusion_matrix.most_common(30):
+    if pred == lab:
+      continue
+      
+    percent = count / float(max(1, label_totals[lab]))
+    print '{0:.2f}% of {1} classified as {2}'.format(100 * percent, lab, pred)
+
   num_correct = 0
   for lang in all_langs:
     num_correct += confusion_matrix[(lang, lang)]
   acc = num_correct / float(len(preds))
   if show:
-    print 'accuracy = {0:.3f}'.format(acc)
+    print 'accuracy = {0:.4f}'.format(acc)
     print ' Lang     Prec.   Rec.   F1'
     print '------------------------------'
   scores = []
@@ -48,16 +57,6 @@ def Metrics(preds, labs, show=True):
     print '------------------------------'
     print fmt_str.format('Total:', totals[0], totals[1], totals[2])
   return totals[2], acc
-
-
-def GetPPL(filename):
-  if os.path.exists(filename):
-    with open(filename, 'r') as f:
-      lines = f.readlines()
-    if len(lines):
-      ppl = lines[-1].split()[-1]
-      return ppl
-  return None
 
 
 class MovingAvg(object):
@@ -98,3 +97,12 @@ def PrintParams(handle=sys.stdout.write):
   handle(fmt_str.format('total', '', param_count))
   if handle==sys.stdout.write:
     sys.stdout.flush()
+
+
+def GetLine(x, y):
+    model = linear_model.LinearRegression()
+    nan_idx = ~(np.isnan(x) | np.isnan(y))
+    y = y[nan_idx]
+    x = x[nan_idx]
+    model.fit(x.values.reshape(len(x), 1), y)
+    return model

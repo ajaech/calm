@@ -44,7 +44,7 @@ def _sum_rows(x):
   # we use _sum_rows(x) in the nce_loss() computation since the loss
   # is mostly used for training.
   cols = array_ops.shape(x)[1]
-  ones_shape = array_ops.pack([cols, 1])
+  ones_shape = tf.stack([cols, 1])
   ones = array_ops.ones(ones_shape, x.dtype)
   return array_ops.reshape(math_ops.matmul(x, ones), [-1])
 
@@ -104,12 +104,7 @@ def _compute_sampled_logits(weights,
         `nn.softmax_cross_entropy_with_logits` (sampled softmax).
   """
 
-  if isinstance(weights, variables.PartitionedVariable):
-    weights = list(weights)
-  if not isinstance(weights, list):
-    weights = [weights]
-
-  scope = weights + [biases, inputs, labels]
+  scope = [biases, inputs, labels]
   with ops.name_scope(name, "compute_sampled_logits", scope):
     if labels.dtype != dtypes.int64:
       labels = math_ops.cast(labels, dtypes.int64)
@@ -133,11 +128,12 @@ def _compute_sampled_logits(weights,
 
     # labels_flat is a [batch_size * num_true] tensor
     # sampled is a [num_sampled] int tensor
-    all_ids = array_ops.concat(0, [labels_flat, sampled])
+    all_ids = tf.concat([labels_flat, sampled], axis=0)
 
     # weights shape is [num_classes, dim]
-    all_w = embedding_ops.embedding_lookup(
-        weights, all_ids, partition_strategy=partition_strategy)
+    all_w = weights(all_ids)
+    #all_w = embedding_ops.embedding_lookup(
+    #    weights, all_ids, partition_strategy=partition_strategy)
     all_b = embedding_ops.embedding_lookup(biases, all_ids)
     
     if hash_func is not None:
@@ -150,21 +146,21 @@ def _compute_sampled_logits(weights,
     # true_w shape is [batch_size * num_true, dim]
     # true_b is a [batch_size * num_true] tensor
     true_w = array_ops.slice(
-        all_w, [0, 0], array_ops.pack([array_ops.shape(labels_flat)[0], -1]))
+        all_w, [0, 0], tf.stack([array_ops.shape(labels_flat)[0], -1]))
     true_b = array_ops.slice(all_b, [0], array_ops.shape(labels_flat))
 
     # inputs shape is [batch_size, dim]
     # true_w shape is [batch_size * num_true, dim]
     # row_wise_dots is [batch_size, num_true, dim]
     dim = array_ops.shape(true_w)[1:2]
-    new_true_w_shape = array_ops.concat(0, [[-1, num_true], dim])
-    row_wise_dots = math_ops.mul(
+    new_true_w_shape = tf.concat([[-1, num_true], dim], axis=0)
+    row_wise_dots = tf.multiply(
         array_ops.expand_dims(inputs, 1),
         array_ops.reshape(true_w, new_true_w_shape))
     # We want the row-wise dot plus biases which yields a
     # [batch_size, num_true] tensor of true_logits.
     dots_as_matrix = tf.reshape(row_wise_dots,
-                                array_ops.concat(0, [[-1], dim]))
+                                tf.concat([[-1], dim], axis=0))
     true_logits = tf.reshape(_sum_rows(dots_as_matrix), [-1, num_true])
     true_b = tf.reshape(true_b, [-1, num_true])
     true_logits += true_b
@@ -173,7 +169,7 @@ def _compute_sampled_logits(weights,
     #   sampled_w shape is [num_sampled, dim]
     #   sampled_b is a [num_sampled] float tensor
     sampled_w = array_ops.slice(
-        all_w, array_ops.pack([array_ops.shape(labels_flat)[0], 0]), [-1, -1])
+        all_w, tf.stack([array_ops.shape(labels_flat)[0], 0]), [-1, -1])
     sampled_b = array_ops.slice(all_b, array_ops.shape(labels_flat), [-1])
 
     # inputs has shape [batch_size, dim]
@@ -192,11 +188,12 @@ def _compute_sampled_logits(weights,
       acc_indices_2d = array_ops.reshape(acc_indices, [-1, 1])
       acc_ids_2d_int32 = array_ops.reshape(
           math_ops.cast(acc_ids, dtypes.int32), [-1, 1])
-      sparse_indices = array_ops.concat(1, [acc_indices_2d, acc_ids_2d_int32],
-                                        "sparse_indices")
+      sparse_indices = tf.concat([acc_indices_2d, acc_ids_2d_int32],
+                                 axis=1, name="sparse_indices")
       # Create sampled_logits_shape = [batch_size, num_sampled]
-      sampled_logits_shape = array_ops.concat(0,
-          [array_ops.shape(labels)[:1], array_ops.expand_dims(num_sampled, 0)])
+      sampled_logits_shape = tf.concat(
+          [array_ops.shape(labels)[:1], array_ops.expand_dims(num_sampled, 0)],
+          axis=0 )
       if sampled_logits.dtype != acc_weights.dtype:
         acc_weights = math_ops.cast(acc_weights, sampled_logits.dtype)
       sampled_logits += sparse_ops.sparse_to_dense(
@@ -212,14 +209,15 @@ def _compute_sampled_logits(weights,
       sampled_logits -= math_ops.log(sampled_expected_count)
 
     # Construct output logits and labels. The true labels/logits start at col 0.
-    out_logits = array_ops.concat(1, [true_logits, sampled_logits])
+    out_logits = tf.concat([true_logits, sampled_logits], axis=1)
     # true_logits is a float tensor, ones_like(true_logits) is a float tensor
     # of ones. We then divide by num_true to ensure the per-example labels sum
     # to 1.0, i.e. form a proper probability distribution.
-    out_labels = array_ops.concat(1, [
+    out_labels = tf.concat( 
+      [
         array_ops.ones_like(true_logits) / num_true,
         array_ops.zeros_like(sampled_logits)
-    ])
+      ], axis=1)
 
   return out_logits, out_labels, l1_cost
 
