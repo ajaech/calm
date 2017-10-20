@@ -246,7 +246,7 @@ class BaseModel(object):
       
     # softmax layer
     bias = self.base_bias
-    if params.use_hash_table:
+    if params.use_hash_table or params.use_context_dependent_bias:
       hval = self.hash_func(self.all_ids, self.context_placeholders)
       bias += hval
 
