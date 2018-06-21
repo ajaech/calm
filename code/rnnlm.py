@@ -366,38 +366,6 @@ def BeamSearch(expdir):
     print item.Cost(), SEPERATOR.join(item.words)
 
 
-def UnigramClassify(expdir):
-  # turn the model into a linear classifier by using the softmax bias
-  saver.restore(session, os.path.join(expdir, 'model.bin'))
-  probs = tf.nn.softmax(model.base_bias + 
-                        tf.transpose(model.bias_tables['subreddit']))
-  log_probs = tf.log(probs).eval(session=session)
-  
-  lang_vocab = context_vocabs['subreddit']
-  vocab_subset = lang_vocab.GetWords()
-
-  print 'preparing dataset'
-  dataset.Prepare(vocab, context_vocabs)
-
-  preds = []
-  labels = []
-  for pos in xrange(dataset.GetNumBatches()):
-    if pos % 10 == 0:
-      print pos
-    batch = dataset.GetNextBatch()
-    
-    for i in xrange(len(batch)):
-      row = batch.iloc[i]
-      scores = np.zeros(len(vocab_subset))
-
-      for word_id in row.text[1:row.seq_lens]:
-        scores += log_probs[:, word_id]
-      preds.append(np.argmax(scores))
-      labels.append(row['subreddit'])
-  metrics.Metrics([lang_vocab[i] for i in preds],
-                  [lang_vocab[i] for i in labels])
-
-
 def GeoClassify(expdir):
   # classify tweets based on lat/long context
   saver.restore(session, os.path.join(expdir, 'model.bin'))

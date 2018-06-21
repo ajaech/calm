@@ -286,7 +286,7 @@ class HyperModel(BaseModel):
                                      reverse=reverse, exclude_unk=exclude_unk,
                                      word_embedder=self.word_embedder)
 
-    self.hash_func = None  # setup the hash table
+    self.hash_func = None
     if params.use_context_dependent_bias:
       self.hash_func = self.GetContextDependentBias(params, context_vocab_sizes)
 
@@ -321,6 +321,7 @@ class HyperModel(BaseModel):
 
   def GetContextDependentBias(self, params, context_vocab_sizes):
     self.bias_tables = {}
+    # create a bias matrix for each context variable
     for context_var, size in zip(params.context_vars, context_vocab_sizes):
       self.bias_tables[context_var] = tf.get_variable(context_var + '_bias',
                                                       [self.vocab_size, size])
@@ -332,11 +333,9 @@ class HyperModel(BaseModel):
       for c_var in s_ids.keys():
         bias_table = self.bias_tables[c_var]
 
-        # first lookup the ids
         selected_ids = tf.nn.embedding_lookup(bias_table, ids)
         result += tf.nn.embedding_lookup(tf.transpose(selected_ids),
                                          s_ids[c_var])
       return result
 
-    self.HashGetter = GetBias
     return GetBias

@@ -22,12 +22,11 @@ class Vocab(object):
     self.idx_to_word = dict(zip(self.word_to_idx.values(),
                             self.word_to_idx.keys()))
 
-
+    self.token_counts = None
     if token_counts:
       self.token_counts = [token_counts[self.idx_to_word[i]] for i in
                            range(self.vocab_size)]
-    else:
-      self.token_counts = None
+
 
   def GetUnigramProbs(self):
     if self.token_counts:
@@ -63,16 +62,6 @@ class Vocab(object):
       tokenset.add('</S>')
 
     return cls(tokenset, unk_symbol=unk_symbol, token_counts=token_counts)
-
-
-  @classmethod
-  def LoadFromTextFile(cls, filename, unk_symbol='<UNK>'):
-    tokens = []
-    with open(filename, 'r') as f:
-      for line in f:
-        line = line.strip()
-        tokens.append(line)
-    return cls(tokens, unk_symbol=unk_symbol)
 
   def GetWords(self):
     """Get a list of words in the vocabulary."""

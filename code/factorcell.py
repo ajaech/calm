@@ -30,11 +30,13 @@ class FactorCell(tf.nn.rnn_cell.RNNCell):
       self.bias = tf.get_variable('bias', [3 * self._num_units],
                                   initializer=tf.constant_initializer(0.0, tf.float32))
 
-      if self.layer_norm:
+      """Layer normalization standardizes the mean and variance of the 
+      hidden state values before their activation functions are 
+      applied."""
+      if self.layer_norm:  # setup layer norm
         self.gammas = []
         self.betas = []
         for gate in ['j', 'f', 'o']:
-          # setup layer norm
           self.gammas.append(
             tf.get_variable('gamma_' + gate, shape=[num_units],
                             initializer=tf.constant_initializer(1.0)))
@@ -97,7 +99,7 @@ class FactorCell(tf.nn.rnn_cell.RNNCell):
       j, f, o = tf.split(axis=1, num_or_size_splits=3, value=result)
 
       def Norm(inputs, gamma, beta):
-        # layer norm helper function
+        # layer norm helper function standardizes mean and variance
         m, v = tf.nn.moments(inputs, [1], keep_dims=True)
         normalized_input = (inputs - m) / tf.sqrt(v + 1e-5)
         return normalized_input * gamma + beta
