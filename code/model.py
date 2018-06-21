@@ -37,7 +37,7 @@ class BaseModel(object):
 
     enable_low_rank_adapt = (params.use_mikolov_adaptation or params.use_lowrank_adaptation or
                              params.use_softmax_adaptation)
-    if enable_low_rank_adapt or params.use_hash_table or params.use_context_dependent_bias:
+    if enable_low_rank_adapt or params.use_context_dependent_bias:
       self.context_placeholders = {}
       self.context_embeddings = {}
       context_embeds = []
@@ -246,7 +246,7 @@ class BaseModel(object):
       
     # softmax layer
     bias = self.base_bias
-    if params.use_hash_table or params.use_context_dependent_bias:
+    if params.use_context_dependent_bias:
       hval = self.hash_func(self.all_ids, self.context_placeholders)
       bias += hval
 
@@ -276,13 +276,6 @@ class HyperModel(BaseModel):
     self.word_embedder = word_embedder
     self.word_tensor = tf.constant(word_vocab.GetWords(), name='words')
 
-    if params.use_hash_table:
-      self.context_name_tensors = {}
-      for cname in context_vocabs:
-        if context_vocabs[cname]:
-          self.context_name_tensors[cname] = tf.constant(
-            context_vocabs[cname].GetWords(), name=cname + '_words')
-
     context_vocab_sizes = []
     for s in params.context_vars:
       if context_vocabs[s]:
@@ -295,9 +288,7 @@ class HyperModel(BaseModel):
                                      word_embedder=self.word_embedder)
 
     self.hash_func = None  # setup the hash table
-    if params.use_hash_table:
-      self.hash_func = self.GetHashFunc(params)
-    elif params.use_context_dependent_bias:
+    if params.use_context_dependent_bias:
       self.hash_func = self.GetContextDependentBias(params, context_vocab_sizes)
 
     context_embeds = None
@@ -350,38 +341,3 @@ class HyperModel(BaseModel):
 
     self.HashGetter = GetBias
     return GetBias
-
-  def GetHashFunc(self, params):
-    """Returns a function that hashes context & unigrams."""
-
-    entries = []
-    with gzip.open(params.hash_entries_filename, 'r') as f:
-      for line in f:
-        entries.append(line.strip())
-
-    self.myhash = tf.contrib.lookup.HashTable(
-      tf.contrib.lookup.KeyValueTensorInitializer(
-        entries, np.arange(1, len(entries) + 1),
-        key_dtype=tf.string, value_dtype=tf.int32), 0)
-    self.aux_hash_table = tf.Variable(np.zeros(len(entries) + 1),
-                                      dtype=tf.float32, name='aux_hash_table')
-
-    def GetHash(ids, s_ids):
-      words = tf.nn.embedding_lookup(self.word_tensor, ids)
-      
-      result = 0.0
-      for c_var in s_ids.keys():
-        context_names = tf.nn.embedding_lookup(self.context_name_tensors[c_var],
-                                               s_ids[c_var])
-        key = tf.string_join([words, context_names], separator='~')
-        val = self.myhash.lookup(key)
-        aux_val = tf.nn.embedding_lookup(self.aux_hash_table, val)
-
-        # zero out the zeros
-        mask = tf.equal(val, 0)
-        result += tf.where(mask, tf.zeros_like(aux_val), aux_val)
-        
-      return result
-
-    self.HashGetter = GetHash
-    return GetHash

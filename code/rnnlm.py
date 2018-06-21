@@ -62,7 +62,7 @@ if args.mode == 'debug':
 SEPERATOR = ' '
 if params.splitter == 'char':
   SEPERATOR = ''
-params.hash_entries_filename = os.path.join(args.expdir, 'hash_entries.txt.gz')
+
 
 if args.mode in ('train', 'eval', 'classify', 'uniclass', 'geoclass'):
   mode = args.mode
@@ -108,15 +108,6 @@ if args.mode == 'train':
 
   dataset.Prepare(vocab, context_vocabs)
 
-  if params.use_hash_table:   # prepare the hash table
-    with gzip.open(params.hash_entries_filename, 'w') as f:
-      for context_var in params.context_vars:
-        grps = dataset.data.groupby(context_var)
-        for s_id, grp in grps:
-          unigrams = np.unique(list(grp.text.values))
-          context_name = context_vocabs[context_var][s_id]
-          for w in unigrams:
-            f.write('{0}~{1}\n'.format(vocab[w], context_name))
 else:
   vocab = Vocab.Load(os.path.join(args.expdir, 'word_vocab.pickle'))
   if params.splitter == 'word':
@@ -176,15 +167,12 @@ def Train(expdir):
                       level=logging.INFO)
   logging.getLogger().addHandler(logging.StreamHandler())
 
-  # have to create the optimzier after initializing the hash table
   tvars = tf.trainable_variables()
   grads, _ = tf.clip_by_global_norm(tf.gradients(model.cost, tvars), 5.0)
   optimizer = tf.train.AdamOptimizer(0.001)
   train_op = optimizer.apply_gradients(zip(grads, tvars))
 
   print('initalizing')
-  if params.use_hash_table:
-    model.myhash.init.run(session=session)
   session.run(tf.global_variables_initializer())
 
   avgcost = metrics.MovingAvg(0.90)
@@ -243,37 +231,11 @@ def ContextBias(expdir):
 
 def Debug(expdir):
   metrics.PrintParams()
-  if params.use_hash_table:
-    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   context_var = params.context_vars[0]
   context_vocab = context_vocabs[context_var]
   subnames = context_vocab.GetWords()
-
-  if params.use_hash_table or params.use_context_dependent_bias:
-    context_placeholder = tf.placeholder(tf.int64, [None])
-    hash_val = model.HashGetter(model.all_ids, 
-                                {context_var: context_placeholder})
-                                  
-    def Process(subname):
-
-      if params.use_context_dependent_bias:
-        table = model.bias_tables[context_var]
-        z = session.run(table[:, context_vocab[subname]])
-      else:
-        z = session.run(hash_val, {context_placeholder: 
-                                   [context_vocab[subname]] * len(vocab)})
-        
-      vals = z.argsort()
-      topwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[-10:]]
-      bottomwords = ['{0} {1:.2f}'.format(vocab[i], z[i]) for i in vals[:10]]
-      print ' '.join(reversed(topwords))
-      print ' '.join(bottomwords)
-
-    for subname in subnames:
-      print subname
-      Process(subname)
 
   def Process(s):
     s = np.squeeze(s.T)
@@ -555,8 +517,6 @@ def Eval(expdir):
   num_batches = dataset.GetNumBatches()
 
   print 'loading model'
-  if params.use_hash_table:
-    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   total_word_count = 0
@@ -590,8 +550,6 @@ def Eval(expdir):
   
 
 def TopNextProbs(expdir):
-  if params.use_hash_table:
-    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   words = '<S> the'.split()
@@ -646,8 +604,6 @@ def Process(fixed_context, greedy=True):
 
 
 def Greedy(expdir):
-  if params.use_hash_table:
-    model.myhash.init.run(session=session)
   saver.restore(session, os.path.join(expdir, 'model.bin'))
     
   for idx in range(20000):

@@ -15,7 +15,6 @@
     "min_vocab_count": 8, 
     "use_softmax_adaptation": false, 
     "rank": 6, 
-    "use_hash_table": false, 
     "context_vars": ["entitytype"],
     "context_embed_size": null, 
     "l1_penalty": 0.0 
