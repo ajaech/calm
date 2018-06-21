@@ -203,6 +203,7 @@ def Train(expdir):
 
 
 def DumpEmbeddings(expdir):
+  """Dump the word embeddings to a file for offline analysis."""
   saver.restore(session, os.path.join(expdir, 'model.bin'))
 
   word = model.word_embedder.GetAllEmbeddings().eval(session=session)

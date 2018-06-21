@@ -1,9 +1,8 @@
 # FactorCell implementation
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell
 
 
-class FactorCell(rnn_cell.RNNCell):
+class FactorCell(tf.nn.rnn_cell.RNNCell):
   """LSTM cell with coupled input and forget gates."""
 
   def __init__(self, num_units, embedding_size, context_embed, 
@@ -70,7 +69,7 @@ class FactorCell(rnn_cell.RNNCell):
 
   @property
   def state_size(self):
-    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
+    return tf.nn.rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
     
   @property
   def output_size(self):
@@ -120,5 +119,5 @@ class FactorCell(rnn_cell.RNNCell):
       new_c = (c * forget_gate + input_gate * g)
       new_h = self._activation(new_c) * tf.sigmoid(o)
 
-      new_state = rnn_cell.LSTMStateTuple(new_c, new_h)
+      new_state = tf.nn.rnn_cell.LSTMStateTuple(new_c, new_h)
       return new_h, new_state

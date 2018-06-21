@@ -1,5 +1,4 @@
 # load, preprocess, and managage datasets
-import argparse
 import bz2
 import gzip
 import numpy as np
@@ -20,20 +19,6 @@ def GetFileHandle(filename):
 def WordSplitter(text):
   text = text.replace('\n', ' ')
   return ['<S>'] + text.lower().split() + ['</S>']
-
-
-# This regex used to find special tokens in the Babel speech transcripts
-pattern = re.compile(r"(<[a-z\-]*>|\(\(\)\))")
-def SpeechSplitter(text):
-  segments = re.split(pattern, text)
-  result = ['<S>']
-  for seg in segments:
-    if re.match(pattern, seg):
-      result.append(seg)
-    else:
-      result += Vocab.Graphemes(seg)
-  result += ['</S>']
-  return result
 
 
 def CharSplitter(text):
@@ -81,8 +66,7 @@ class Dataset(object):
 
   def ReadData(self, filenames, columns, valdata=[], limit=10000000,
                splitter='word', types=None):
-    SplitFunc = {'word': WordSplitter, 'char': CharSplitter,
-                 'speech': SpeechSplitter}[splitter]
+    SplitFunc = {'word': WordSplitter, 'char': CharSplitter}[splitter]
 
     self.data = ReadMultiple(filenames, columns, limit)
     if types:
@@ -171,18 +155,3 @@ class Dataset(object):
     self.current_val_idx += self.batch_size
     return self.valdata.iloc[idx]
 
-
-if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--filename', default='/s0/ajaech/reddit.tsv.bz2')
-  parser.add_argument('--out')
-  args = parser.parse_args()
-
-  data = ReadData(args.filename, columns=None, limit=None)
-  usernames = data[0]
-  texts = data[2].apply(NgramSplitter)
-  with open(args.out, 'w') as f:
-    for uname, t in zip(usernames, texts):
-      f.write('{0}\t'.format(uname))
-      f.write(' '.join(t[1:-1]))
-      f.write('\n')

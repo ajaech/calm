@@ -153,5 +153,3 @@ class Char2Vec(object):
     self.word_lens = tf.Variable(trainable=False, initial_value=lengths, name='word_lens')
     self.words_as_chars = tf.Variable(trainable=False, initial_value=grapheme_ids, 
                                       name='words_as_chars')
-
-

@@ -1,7 +1,6 @@
 import gzip
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell
 
 from factorcell import FactorCell
 import nn_impl
@@ -236,7 +235,7 @@ class BaseModel(object):
       prev_embed = prev_embed[:, self.context_size:]
 
     # one iteration of recurrent layer
-    state = rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
+    state = tf.nn.rnn_cell.LSTMStateTuple(self.prev_c, self.prev_h)
     with tf.variable_scope('RNN', reuse=True):
       result, (self.next_c, self.next_h) = self.cell(prev_embed, state)
 
