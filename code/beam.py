@@ -81,7 +81,7 @@ class BeamQueue(object):
       self.Eject()
             
   def CheckBound(self, val):
-    # If the queue is full then we no that there is no chance of a new item
+    # If the queue is full then we know that there is no chance of a new item
     # being accepted if it's priority is worse than the last thing that got
     # ejected.
     if self.size >= self.max_size and self.bound is not None and val > self.bound:
