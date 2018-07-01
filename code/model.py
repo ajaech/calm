@@ -140,12 +140,13 @@ class BaseModel(object):
 
   def _GetSample(self, true_classes, num_sampled):
     """Helper function for sampled softmax loss."""
-    return tf.nn.learned_unigram_candidate_sampler(
+    return tf.nn.fixed_unigram_candidate_sampler(
       true_classes=true_classes,
       num_true=1,
       num_sampled=num_sampled,
       unique=True,
-      range_max=self.vocab_size)
+      range_max=self.vocab_size,
+      unigrams=list(self.unigram_probs))
 
   def AltNCE(self, weights, EmbeddingGetter, num_sampled, hash_func):
     """This is the version of NCE that is compatible with the feature hashing.
