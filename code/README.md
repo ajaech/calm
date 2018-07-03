@@ -12,3 +12,15 @@ Descrpition of files:
 * nn_impl.py - tensorflow sampled softmax loss (modified to handle context)
 * rnnlm.py - main script to train and evaluate
 * vocab.py - create, save, and load vocabularies
+
+
+Train a model using 
+`
+./rnnlm.py path/to/expdir --data ../data/dbpedia_small_train.tsv --valdata ../data/dbpedia_small_val.tsv
+`
+
+Evaluate the model using 
+
+`
+./rnnlm.py path/to/expdir --data ../data/dbpedia_small_val.tsv --mode=eval
+`

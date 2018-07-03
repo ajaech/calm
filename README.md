@@ -6,8 +6,4 @@ Code for building language models that adapt to different contexts. This code wa
 
 The main idea is that metadata or other context information can be used to adapt or control a language model. The adaptation takes place by allowing a context embedding to transform the weights of the recurrent layer of the model. We call this model the FactorCell model.
 
-Train a model using 
-`
-./rnnlm.py /s0/ajaech/exptest --data ../data/dbpedia_small_train.tsv --valdata ../data/dbpedia_small_val.tsv
-`
 I will work on documenting the code more. Send me a message if you want some help getting started.
