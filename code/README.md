@@ -1,5 +1,5 @@
 
-Descrpition of files:
+## Descrpition of Files
 
 * beam.py - functions used in beam search decoding
 * char2vec.py - used for creating word embedding layers
@@ -13,6 +13,7 @@ Descrpition of files:
 * rnnlm.py - main script to train and evaluate
 * vocab.py - create, save, and load vocabularies
 
+## Example Commands
 
 Train a model using 
 `
